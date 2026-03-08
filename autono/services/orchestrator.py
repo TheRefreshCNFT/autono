@@ -1,11 +1,12 @@
-"""Orchestrator — boots and manages all 13 agents.
+"""Orchestrator — boots and manages all agents.
 
 The orchestrator is NOT a boss — it's a launcher and router.
 Agents are autonomous once started.  The orchestrator just:
-1. Instantiates all 13 agents
+1. Instantiates all 13 core agents + chain specialists + managers
 2. Connects them via the message bus
 3. Starts their async loops
 4. Provides the Human Council interface
+5. Initializes the Links & Locks knowledge layer
 """
 
 from __future__ import annotations
@@ -24,11 +25,14 @@ from autono.sidechain.bridge import CardanoBridge
 from autono.sidechain.consensus import OuroborosTurbo
 from autono.sidechain.state import StateManager
 
+# Cross-chain system
+from autono.agents.chain_specialists.cross_chain_orchestrator import CrossChainOrchestrator
+
 log = structlog.get_logger()
 
 
 class Orchestrator:
-    """Launch pad for the 13 autonomous agents and sidechain infrastructure."""
+    """Launch pad for all autonomous agents, sidechain, and cross-chain infrastructure."""
 
     def __init__(self) -> None:
         # Core infrastructure
@@ -42,14 +46,26 @@ class Orchestrator:
         self.bridge = CardanoBridge()
         self.state = StateManager()
 
-        # Agents — instantiated but not yet started
+        # Core agents — the original 13
         self.agents = {}
         for agent_cls in ALL_AGENTS:
             agent = agent_cls()
             self.agents[agent.name] = agent
             self.bus.register(agent)
 
-        log.info("orchestrator.initialized", agent_count=len(self.agents))
+        # Cross-chain system — chain specialists + managers + knowledge layer
+        # Shares the same MessageBus so all agents can communicate
+        self.cross_chain = CrossChainOrchestrator(bus=self.bus)
+
+        # Merge all agents into one registry for unified status/query
+        self.agents.update(self.cross_chain.managers)
+        self.agents.update(self.cross_chain.chain_agents)
+
+        log.info("orchestrator.initialized",
+                 core_agents=len(ALL_AGENTS),
+                 managers=len(self.cross_chain.managers),
+                 chain_agents=len(self.cross_chain.chain_agents),
+                 total=len(self.agents))
 
     async def start(self) -> None:
         """Launch everything — agents run autonomously from here."""
@@ -83,6 +99,7 @@ class Orchestrator:
     def _set_founding_goals(self) -> None:
         """Set the founding mission goals for each agent."""
         goals = {
+            # Original 13
             "ChainArchitect": "Build and optimize sidechain consensus for 1000+ TPS with sub-second finality",
             "BridgeKeeper": "Operate secure, fast bridge between Cardano and sidechain",
             "TokenForge": "Design and launch the AUTONO native token with sustainable tokenomics",
@@ -96,6 +113,18 @@ class Orchestrator:
             "InfraOps": "Achieve 99.99% uptime with global node distribution",
             "ResearchLab": "Stay at the frontier — integrate latest tech within months",
             "TreasuryVault": "Ensure financial sustainability for 10+ years",
+            # Managers
+            "ThrottleManager": "Keep system usable on all hardware — never exceed 85% resources",
+            "EmbedManager": "Validate knowledge currency — no stale facts in the system",
+            "ExpansionManager": "Grow and prune the knowledge graph — no ghost links",
+            "ResearchManager": "Continuously research and document new protocol knowledge",
+            "LinkManager": "Stitch cross-domain shortcuts — the Doctor of the knowledge graph",
+            "LockManager": "Seal deterministic facts — the Healer that makes inference unnecessary",
+            # Chain specialists
+            "CardanoChainAgent": "Master Cardano protocol — eUTXO, Plutus, CIPs, Opshin, Helios",
+            "BitcoinChainAgent": "Master Bitcoin protocol — UTXO, BIPs, Taproot, Charms integration",
+            "NightChainAgent": "Secure encrypted vault — seed phrases, knowledge graph persistence",
+            "CharmsAgent": "Bridge Cardano and Bitcoin — Charms spells, BitcoinOS, ZK proofs",
         }
         for agent_name, goal in goals.items():
             self.autonomy.set_goal(agent_name, goal)
@@ -122,3 +151,19 @@ class Orchestrator:
             "bridge": self.bridge.status(),
             "state": self.state.stats(),
         }
+
+    def cross_chain_status(self) -> dict[str, Any]:
+        """Get cross-chain system status (managers, chain agents, knowledge)."""
+        return self.cross_chain.status()
+
+    def knowledge_status(self) -> dict[str, Any]:
+        """Get knowledge layer statistics (nodes, links, locks, mlocks)."""
+        return self.cross_chain.knowledge_stats()
+
+    def query_knowledge(self, node_id: str) -> dict[str, Any]:
+        """Query the knowledge graph — returns locked answer or context."""
+        return self.cross_chain.query_knowledge(node_id)
+
+    def get_bridge_route(self, from_chain: str, to_chain: str) -> dict[str, Any]:
+        """Get optimal cross-chain bridge route."""
+        return self.cross_chain.get_bridge_route(from_chain, to_chain)
