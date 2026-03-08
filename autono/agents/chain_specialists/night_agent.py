@@ -102,6 +102,14 @@ class NightChainAgent(AutonomousAgent):
             await self._seed_protocol_facts()
             self._facts_seeded = True
 
+        # Request expert-level research scraping for Night Chain domain
+        if not hasattr(self, "_research_requested"):
+            await self.send("ResearchManager", "request", {
+                "type": "scrape_domain",
+                "domain": "night_chain",
+            })
+            self._research_requested = True
+
         # Periodic knowledge graph backup to Night Chain
         await self._backup_knowledge_graph()
 

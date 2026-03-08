@@ -217,6 +217,18 @@ class CharmsAgent(AutonomousAgent):
             await self._seed_protocol_facts()
             self._facts_seeded = True
 
+        # Request expert-level research scraping for Charms + BitcoinOS
+        if not hasattr(self, "_research_requested"):
+            await self.send("ResearchManager", "request", {
+                "type": "scrape_domain",
+                "domain": "charms",
+            })
+            await self.send("ResearchManager", "request", {
+                "type": "scrape_domain",
+                "domain": "bitcoinos",
+            })
+            self._research_requested = True
+
     async def handle_message(self, msg: Message) -> None:
         if msg.kind == "request":
             req_type = msg.payload.get("type", "")

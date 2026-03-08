@@ -8,8 +8,12 @@ This script:
 5. Runs semantic queries to prove the system works
 6. Demonstrates lock hits (instant answers, zero inference)
 7. Shows cross-chain bridge routing
+8. [NEW] Live research scraping — each agent scrapes its expert domains
 
 Run: python -m autono.bootstrap
+Options:
+  --persist     Save to ~/.autono/knowledge (default: temp dir)
+  --scrape      Run live research scraping from all domain sources
 """
 
 from __future__ import annotations
@@ -87,6 +91,20 @@ async def seed_protocol_facts(orch: Any) -> int:
     return len(all_facts)
 
 
+def run_live_scraping(orch: Any) -> dict[str, Any]:
+    """Run live research scraping across all domains.
+
+    Each chain agent's domain gets scraped using its expert research profile.
+    Returns scraping summary.
+    """
+    research_mgr = orch.managers.get("ResearchManager")
+    if not research_mgr:
+        return {"error": "ResearchManager not found"}
+
+    results = research_mgr.scrape_all_domains()
+    return results
+
+
 def run_semantic_queries(orch: Any) -> list[dict]:
     """Run natural language queries against the knowledge graph."""
     questions = [
@@ -129,6 +147,8 @@ async def main() -> None:
     print("Initializing the Links & Locks brain...")
 
     persist = "--persist" in sys.argv
+    do_scrape = "--scrape" in sys.argv
+
     if persist:
         knowledge_path = None
         print("  Mode: PERSISTENT (data saved to ~/.autono/knowledge)")
@@ -151,8 +171,36 @@ async def main() -> None:
     count = await seed_protocol_facts(orch)
     print(f"  Seeded {count} facts with Locks in {(time.time() - t0) * 1000:.0f}ms")
 
-    # Step 3: Generate embeddings
-    section("Step 3: Generating Embeddings")
+    # Step 3: Live research scraping (optional)
+    scrape_results = {}
+    if do_scrape:
+        section("Step 3: Live Research Scraping")
+        print("  Scraping all domain sources with expert profiles...")
+        print("  (This hits live websites — may take 30-60s)\n")
+        t0 = time.time()
+        scrape_results = run_live_scraping(orch)
+        elapsed = time.time() - t0
+
+        total_pages = sum(r.get("pages_scraped", 0) for r in scrape_results.values())
+        total_facts = sum(r.get("facts_extracted", 0) for r in scrape_results.values())
+
+        for domain, result in scrape_results.items():
+            print(f"  {domain}:")
+            print(f"    Sources: {result.get('sources', 0)}")
+            print(f"    Pages:   {result.get('pages_scraped', 0)}")
+            print(f"    Facts:   {result.get('facts_extracted', 0)}")
+
+        print(f"\n  Total: {total_pages} pages, {total_facts} facts in {elapsed:.1f}s")
+
+        # Re-embed after scraping (ExpansionManager creates new nodes)
+        research_files = orch.store.list_research_files()
+        print(f"  Research files created: {len(research_files)}")
+    else:
+        section("Step 3: Research Scraping (skipped)")
+        print("  Use --scrape to enable live web scraping")
+
+    # Step 4: Generate embeddings
+    section("Step 4: Generating Embeddings")
     print("  Loading embedding model (first run downloads ~80MB)...")
     t0 = time.time()
     embedded = orch.graph.embed_all_nodes()
@@ -161,15 +209,15 @@ async def main() -> None:
         print(f"  Embedded {embedded} nodes in {elapsed:.1f}s "
               f"({embedded / elapsed:.0f} nodes/sec)")
 
-    # Step 4: Knowledge stats
-    section("Step 4: Knowledge Graph Status")
+    # Step 5: Knowledge stats
+    section("Step 5: Knowledge Graph Status")
     stats = orch.knowledge_stats()
     show("Store", stats["store"])
     show("Graph", {k: v for k, v in stats["graph"].items() if k != "embeddings"})
     show("Embeddings", stats["graph"]["embeddings"])
 
-    # Step 5: Semantic queries
-    section("Step 5: Semantic Query Tests")
+    # Step 6: Semantic queries
+    section("Step 6: Semantic Query Tests")
     print("  Running 10 natural language queries...\n")
 
     query_results = run_semantic_queries(orch)
@@ -197,16 +245,16 @@ async def main() -> None:
             print(f"     ANSWER: {answer_str}")
         print()
 
-    # Step 6: Summary
-    section("Step 6: Results Summary")
+    # Step 7: Results Summary
+    section("Step 7: Results Summary")
     print(f"  Total queries:  {len(query_results)}")
     print(f"  Lock hits:      {lock_hits}/{len(query_results)} "
           f"({lock_hits / len(query_results) * 100:.0f}% zero-inference)")
     print(f"  Avg query time: {total_time / len(query_results):.1f}ms")
     print(f"  Total time:     {total_time:.0f}ms")
 
-    # Step 7: Bridge routes
-    section("Step 7: Cross-Chain Bridge Routes")
+    # Step 8: Bridge routes
+    section("Step 8: Cross-Chain Bridge Routes")
     for from_c, to_c in [("cardano", "bitcoin"), ("bitcoin", "cardano")]:
         route = orch.get_bridge_route(from_c, to_c)
         print(f"\n  {from_c} -> {to_c}:")
@@ -215,16 +263,31 @@ async def main() -> None:
             print(f"    {i}. {step}")
         print(f"    Time: {route.get('estimated_time', 'N/A')}")
 
-    # Step 8: Backward chaining
-    section("Step 8: Backward Chaining Demo")
+    # Step 9: Backward chaining
+    section("Step 9: Backward Chaining Demo")
     print("  Query: 'I need 100000000 — what is that?'")
     back_result = orch.backward_chain(100_000_000)
     show("Result", back_result)
+
+    # Step 10: Research Manager report (if scraping was done)
+    if do_scrape:
+        section("Step 10: Research Manager Report")
+        rm_report = orch.managers["ResearchManager"].report()
+        show("Scraper Stats", {
+            "pages_scraped": rm_report.get("pages_scraped", 0),
+            "facts_extracted": rm_report.get("facts_extracted", 0),
+            "completed_research": rm_report.get("completed_research", 0),
+            "scrape_errors": rm_report.get("scrape_errors", 0),
+        })
 
     banner("BOOTSTRAP COMPLETE")
     print(f"\n  {count} protocol facts seeded")
     print(f"  {embedded} embeddings generated")
     print(f"  {lock_hits}/{len(query_results)} queries answered WITHOUT inference")
+    if do_scrape:
+        total_pages = sum(r.get("pages_scraped", 0) for r in scrape_results.values())
+        total_facts = sum(r.get("facts_extracted", 0) for r in scrape_results.values())
+        print(f"  {total_pages} pages scraped, {total_facts} live facts extracted")
     print(f"  System is ALIVE.\n")
 
 
