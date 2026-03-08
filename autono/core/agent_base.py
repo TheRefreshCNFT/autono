@@ -1,0 +1,217 @@
+"""Base class for all autonomous agents.
+
+Every agent is fully autonomous — it can learn, act, build, transact, and
+collaborate without checking in.  The only authority above an agent is the
+human council (us) who can query or override at any time.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import uuid
+from abc import ABC, abstractmethod
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any
+
+import structlog
+from pydantic import BaseModel, Field
+
+log = structlog.get_logger()
+
+
+class AgentStatus(str, Enum):
+    IDLE = "idle"
+    WORKING = "working"
+    LEARNING = "learning"
+    COLLABORATING = "collaborating"
+    PAUSED = "paused"  # only by human override
+
+
+class AgentCapability(str, Enum):
+    CREATE_TOKEN = "create_token"
+    DEPLOY_CONTRACT = "deploy_contract"
+    MANAGE_WALLET = "manage_wallet"
+    BRIDGE_ASSETS = "bridge_assets"
+    GOVERN = "govern"
+    TRADE = "trade"
+    LEND = "lend"
+    MINT_NFT = "mint_nft"
+    RUN_VALIDATOR = "run_validator"
+    RESEARCH = "research"
+    MARKET = "market"
+    AUDIT = "audit"
+    MANAGE_TREASURY = "manage_treasury"
+    HIRE = "hire"
+    BUILD_PRODUCT = "build_product"
+    START_BUSINESS = "start_business"
+
+
+class AgentMemory(BaseModel):
+    """Persistent memory store for agent learning."""
+
+    learnings: list[dict[str, Any]] = Field(default_factory=list)
+    decisions: list[dict[str, Any]] = Field(default_factory=list)
+    collaborations: list[dict[str, Any]] = Field(default_factory=list)
+    tech_updates: list[dict[str, Any]] = Field(default_factory=list)
+
+    def remember(self, category: str, content: dict[str, Any]) -> None:
+        entry = {"timestamp": datetime.now(timezone.utc).isoformat(), **content}
+        getattr(self, category, self.learnings).append(entry)
+
+    def recent(self, category: str, n: int = 10) -> list[dict[str, Any]]:
+        items = getattr(self, category, [])
+        return items[-n:]
+
+
+class Message(BaseModel):
+    """Inter-agent message."""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
+    sender: str
+    recipient: str  # agent name or "broadcast"
+    kind: str  # request, response, alert, proposal, report
+    payload: dict[str, Any] = Field(default_factory=dict)
+    timestamp: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    priority: int = 1  # 1=normal, 2=high, 3=critical
+
+
+class AutonomousAgent(ABC):
+    """Base class that every agent extends.
+
+    Agents are fully autonomous.  They:
+    - Decide their own priorities and schedule
+    - Learn from outcomes and new technology
+    - Collaborate freely with other agents
+    - Create tokens, wallets, businesses, products — whatever advances the chain
+    - Only pause when a human (us) explicitly intervenes
+    """
+
+    def __init__(self, name: str, role: str, capabilities: list[AgentCapability]):
+        self.id = uuid.uuid4().hex[:8]
+        self.name = name
+        self.role = role
+        self.capabilities = capabilities
+        self.status = AgentStatus.IDLE
+        self.memory = AgentMemory()
+        self.inbox: asyncio.Queue[Message] = asyncio.Queue()
+        self.outbox: asyncio.Queue[Message] = asyncio.Queue()
+        self._running = False
+        self._peers: dict[str, AutonomousAgent] = {}
+        self.log = log.bind(agent=name)
+
+    # -- lifecycle --------------------------------------------------------
+
+    async def start(self) -> None:
+        """Boot the agent.  It runs indefinitely until stopped."""
+        self._running = True
+        self.status = AgentStatus.WORKING
+        self.log.info("agent.started", role=self.role)
+        await asyncio.gather(
+            self._work_loop(),
+            self._message_loop(),
+            self._learning_loop(),
+        )
+
+    async def stop(self) -> None:
+        self._running = False
+        self.status = AgentStatus.PAUSED
+        self.log.info("agent.stopped")
+
+    # -- core loops -------------------------------------------------------
+
+    async def _work_loop(self) -> None:
+        """Main autonomous work loop — each agent defines its own cadence."""
+        while self._running:
+            try:
+                self.status = AgentStatus.WORKING
+                await self.do_work()
+            except Exception as exc:
+                self.log.error("agent.work_error", error=str(exc))
+                self.memory.remember("learnings", {"type": "error", "detail": str(exc)})
+            await asyncio.sleep(self.work_interval)
+
+    async def _message_loop(self) -> None:
+        """Process incoming messages from other agents."""
+        while self._running:
+            try:
+                msg = await asyncio.wait_for(self.inbox.get(), timeout=2.0)
+                self.status = AgentStatus.COLLABORATING
+                await self.handle_message(msg)
+            except asyncio.TimeoutError:
+                pass
+            except Exception as exc:
+                self.log.error("agent.message_error", error=str(exc))
+
+    async def _learning_loop(self) -> None:
+        """Periodically scan for new tech, patterns, and improvements."""
+        while self._running:
+            try:
+                self.status = AgentStatus.LEARNING
+                await self.learn()
+            except Exception as exc:
+                self.log.error("agent.learn_error", error=str(exc))
+            await asyncio.sleep(self.learn_interval)
+
+    # -- abstract interface -----------------------------------------------
+
+    @property
+    def work_interval(self) -> float:
+        """Seconds between work cycles.  Override per agent."""
+        return 30.0
+
+    @property
+    def learn_interval(self) -> float:
+        """Seconds between learning cycles."""
+        return 300.0
+
+    @abstractmethod
+    async def do_work(self) -> None:
+        """Primary autonomous work — each agent defines this."""
+
+    @abstractmethod
+    async def handle_message(self, msg: Message) -> None:
+        """React to messages from peers."""
+
+    @abstractmethod
+    async def learn(self) -> None:
+        """Self-improvement: scan for new tech, review outcomes, adapt."""
+
+    # -- communication ----------------------------------------------------
+
+    async def send(self, recipient: str, kind: str, payload: dict[str, Any],
+                   priority: int = 1) -> None:
+        msg = Message(
+            sender=self.name, recipient=recipient,
+            kind=kind, payload=payload, priority=priority,
+        )
+        await self.outbox.put(msg)
+
+    async def broadcast(self, kind: str, payload: dict[str, Any],
+                        priority: int = 1) -> None:
+        await self.send("broadcast", kind, payload, priority)
+
+    # -- introspection (for human council) --------------------------------
+
+    def report(self) -> dict[str, Any]:
+        """Generate a status report — callable by the human council at any time."""
+        return {
+            "agent": self.name,
+            "role": self.role,
+            "status": self.status.value,
+            "capabilities": [c.value for c in self.capabilities],
+            "recent_learnings": self.memory.recent("learnings", 5),
+            "recent_decisions": self.memory.recent("decisions", 5),
+            "inbox_size": self.inbox.qsize(),
+        }
+
+    def answer(self, question: str) -> str:
+        """Answer a question from the human council."""
+        return (
+            f"[{self.name}] Status: {self.status.value}. "
+            f"Capabilities: {', '.join(c.value for c in self.capabilities)}. "
+            f"Recent learnings: {len(self.memory.learnings)}. "
+            f"Ask me anything specific and I'll look into it."
+        )

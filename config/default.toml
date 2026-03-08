@@ -1,0 +1,59 @@
+# Autono Sidechain Configuration
+# 13 Autonomous Agents — Cardano Sidechain
+
+[chain]
+name = "autono"
+chain_id = 42
+native_token = "AUTO"
+native_token_decimals = 6
+
+[consensus]
+type = "ouroboros_turbo"
+block_time_ms = 500
+epoch_length = 21600
+finality_depth = 2
+min_validators = 7
+max_validators = 100
+min_stake = 10000
+
+[bridge]
+required_attestations = 5
+challenge_period_seconds = 3600
+min_transfer_ada = 5
+max_transfer_ada = 1000000
+fee_bps = 10
+
+[tokenomics]
+max_supply = 1000000000
+initial_distribution_pct = 20
+staking_rewards_pct = 30
+treasury_pct = 15
+team_pct = 10
+ecosystem_pct = 15
+liquidity_pct = 10
+
+[agents]
+# All agents are fully autonomous
+# They can create tokens, wallets, businesses, products
+# They only answer to the Human Council when reached out to
+autonomy_level = "full"
+learning_interval_seconds = 300
+collaboration_enabled = true
+self_improvement_enabled = true
+
+[agents.permissions]
+create_token = true
+deploy_contract = true
+manage_wallet = true
+bridge_assets = true
+trade = true
+lend = true
+mint_nft = true
+run_validator = true
+research = true
+market = true
+audit = true
+manage_treasury = true
+hire = true
+build_product = true
+start_business = true

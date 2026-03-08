@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "autono"
+version = "0.1.0"
+description = "13 Autonomous Agents for a Cardano Sidechain - faster, cheaper, user-friendly blockchain"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+    { name = "TheRefreshCNFT" },
+]
+keywords = ["cardano", "sidechain", "agents", "autonomous", "blockchain", "defi"]
+
+dependencies = [
+    "pydantic>=2.0",
+    "asyncio-mqtt>=0.16",
+    "aiohttp>=3.9",
+    "cryptography>=42.0",
+    "pynacl>=1.5",
+    "cbor2>=5.6",
+    "websockets>=12.0",
+    "rich>=13.0",
+    "click>=8.1",
+    "structlog>=24.0",
+    "apscheduler>=3.10",
+    "aiosqlite>=0.20",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.3",
+    "mypy>=1.8",
+]
+
+[project.scripts]
+autono = "autono.cli:main"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
