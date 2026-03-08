@@ -1,0 +1,65 @@
+<!-- wAli Walrus Logo Placeholder 🦭 
+     Final version should be NFT-style illustration
+     Dimensions needed:
+     - Extension icon: 128x128, 48x48, 16x16
+     - Mobile icon: 1024x1024, 512x512
+     - Web/Marketing: Variable sizes
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <linearGradient id="wali-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#4A90E2;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#357ABD;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="wali-accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#50E3C2;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#F5A623;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Background circle -->
+  <circle cx="100" cy="100" r="95" fill="url(#wali-gradient)" />
+  
+  <!-- Walrus body (simplified) -->
+  <ellipse cx="100" cy="120" rx="60" ry="50" fill="#F8F9FA" opacity="0.95" />
+  
+  <!-- Walrus head -->
+  <ellipse cx="100" cy="85" rx="45" ry="40" fill="#F8F9FA" opacity="0.95" />
+  
+  <!-- Eyes -->
+  <circle cx="85" cy="80" r="6" fill="#24292E" />
+  <circle cx="115" cy="80" r="6" fill="#24292E" />
+  <circle cx="87" cy="78" r="2" fill="#FFFFFF" />
+  <circle cx="117" cy="78" r="2" fill="#FFFFFF" />
+  
+  <!-- Nose -->
+  <ellipse cx="100" cy="95" rx="8" ry="6" fill="#24292E" opacity="0.7" />
+  
+  <!-- Tusks -->
+  <rect x="88" y="100" width="4" height="20" rx="2" fill="#FFFFEE" opacity="0.9" />
+  <rect x="108" y="100" width="4" height="20" rx="2" fill="#FFFFEE" opacity="0.9" />
+  
+  <!-- Whiskers (left) -->
+  <line x1="55" y1="90" x2="75" y2="88" stroke="#24292E" stroke-width="1.5" opacity="0.6" />
+  <line x1="55" y1="95" x2="75" y2="95" stroke="#24292E" stroke-width="1.5" opacity="0.6" />
+  <line x1="55" y1="100" x2="75" y2="102" stroke="#24292E" stroke-width="1.5" opacity="0.6" />
+  
+  <!-- Whiskers (right) -->
+  <line x1="145" y1="90" x2="125" y2="88" stroke="#24292E" stroke-width="1.5" opacity="0.6" />
+  <line x1="145" y1="95" x2="125" y2="95" stroke="#24292E" stroke-width="1.5" opacity="0.6" />
+  <line x1="145" y1="100" x2="125" y2="102" stroke="#24292E" stroke-width="1.5" opacity="0.6" />
+  
+  <!-- Flippers -->
+  <ellipse cx="60" cy="130" rx="15" ry="25" fill="#E1E4E8" opacity="0.8" transform="rotate(-20 60 130)" />
+  <ellipse cx="140" cy="130" rx="15" ry="25" fill="#E1E4E8" opacity="0.8" transform="rotate(20 140 130)" />
+  
+  <!-- Crypto coin accent (holding a coin) -->
+  <circle cx="100" cy="155" r="12" fill="url(#wali-accent)" opacity="0.9" />
+  <text x="100" y="161" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="middle">₿</text>
+  
+  <!-- Friendly smile -->
+  <path d="M 85 92 Q 100 100 115 92" stroke="#24292E" stroke-width="2" fill="none" opacity="0.7" stroke-linecap="round" />
+  
+  <!-- Border -->
+  <circle cx="100" cy="100" r="95" fill="none" stroke="url(#wali-gradient)" stroke-width="3" opacity="0.5" />
+</svg>

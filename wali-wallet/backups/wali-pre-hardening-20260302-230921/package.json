@@ -1,0 +1,59 @@
+{
+  "name": "wali-wallet",
+  "version": "1.0.0",
+  "description": "wAli - Your Friendly Crypto Companion 🦭 | Multi-chain wallet with conversational UX",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "start": "node wali-start.js",
+    "build": "tsc",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:integration": "jest src/__tests__/wali-integration.test.ts",
+    "clean": "rm -rf dist",
+    "security:audit": "npm audit --audit-level=high",
+    "security:test": "ts-node security-testing-suite.ts",
+    "security:pentest": "ts-node penetration-tests.ts",
+    "security:lint": "eslint --config .eslintrc.security.json 'src/**/*.{ts,js}'",
+    "security:full": "npm run security:audit && npm run security:lint && ts-node run-security-tests.ts",
+    "lint": "eslint 'src/**/*.{ts,js}'",
+    "lint:fix": "eslint 'src/**/*.{ts,js}' --fix"
+  },
+  "keywords": [
+    "wali",
+    "walrus",
+    "crypto-wallet",
+    "cardano",
+    "bitcoin",
+    "night-chain",
+    "conversational-ui",
+    "friendly-crypto",
+    "multi-chain",
+    "secure-wallet"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "@emurgo/cardano-serialization-lib-nodejs": "^15.0.3",
+    "@scure/bip32": "^2.0.1",
+    "@scure/bip39": "^2.0.1",
+    "axios": "^1.13.6",
+    "bip32": "^5.0.1",
+    "bip39": "^3.1.0",
+    "bitcoinjs-lib": "^6.1.7",
+    "dotenv": "^17.3.1",
+    "ecpair": "^3.0.1",
+    "tiny-secp256k1": "^2.2.4"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^25.3.3",
+    "jest": "^29.7.0",
+    "sharp": "^0.34.5",
+    "ts-jest": "^29.4.6",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}

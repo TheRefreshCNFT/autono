@@ -1,0 +1,22 @@
+{
+  "name": "conversational-wallet-discord-bot",
+  "version": "1.0.0",
+  "description": "Discord bot interface for conversational wallet",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@wallet-ui/shared": "file:../shared",
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0",
+    "ts-node": "^10.9.2"
+  }
+}

@@ -1,0 +1,43 @@
+
+╔══════════════════════════════════════════════════════════════════════╗
+║                                                                      ║
+║     ██╗    ██╗ █████╗ ██╗     ██╗                                   ║
+║     ██║    ██║██╔══██╗██║     ██║                                   ║
+║     ██║ █╗ ██║███████║██║     ██║                                   ║
+║     ██║███╗██║██╔══██║██║     ██║                                   ║
+║     ╚███╔███╔╝██║  ██║███████╗██║                                   ║
+║      ╚══╝╚══╝ ╚═╝  ╚═╝╚══════╝╚═╝                                   ║
+║                                                                      ║
+║              🦭  Your Friendly Crypto Companion  🦭                  ║
+║                                                                      ║
+║══════════════════════════════════════════════════════════════════════║
+║                                                                      ║
+║   ✨ Features:                                                       ║
+║      • Conversational UX - Talk naturally to your wallet            ║
+║      • Multi-Chain Support - Cardano, Bitcoin, Night & more         ║
+║      • Military-Grade Security - AES-256-GCM encryption             ║
+║      • Friendly Recovery - No scary technical terms                 ║
+║                                                                      ║
+║   🚀 Quick Start:                                                    ║
+║      1. Create wallet: "create wallet"                              ║
+║      2. Check balance: "balance"                                    ║
+║      3. Send crypto: "send 10 ADA to $alice"                        ║
+║      4. Get help: "help"                                            ║
+║                                                                      ║
+║   📖 Documentation:                                                  ║
+║      • User Guide → WALI_USER_GUIDE.md                              ║
+║      • Developer Guide → WALI_DEVELOPER_GUIDE.md                    ║
+║      • Quick Reference → WALI_QUICK_REFERENCE.md                    ║
+║                                                                      ║
+║   🔐 Security First:                                                 ║
+║      ✓ No plaintext storage    ✓ 3-strike protection                ║
+║      ✓ Memory wiping          ✓ On-chain encryption                 ║
+║      ✓ Zero tracking          ✓ Open source & auditable             ║
+║                                                                      ║
+║══════════════════════════════════════════════════════════════════════║
+║                                                                      ║
+║          Making crypto simple & friendly since 2026 🦭              ║
+║                        Version 1.0.0                                 ║
+║                                                                      ║
+╚══════════════════════════════════════════════════════════════════════╝
+

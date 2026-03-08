@@ -1,0 +1,44 @@
+{
+  "name": "wali-wallet-extension",
+  "version": "1.0.0",
+  "description": "wAli - Your Friendly Multi-Chain Wallet 🦭",
+  "scripts": {
+    "build": "webpack --mode production",
+    "dev": "webpack --mode development --watch",
+    "test": "jest",
+    "generate-icons": "node create-basic-icons.js"
+  },
+  "dependencies": {
+    "@emurgo/cardano-serialization-lib-browser": "^12.0.0",
+    "@scure/bip32": "^2.0.1",
+    "@scure/bip39": "^2.0.1",
+    "@wallet-ui/shared": "file:../shared",
+    "axios": "^1.13.6",
+    "bip39": "^3.1.0",
+    "bitcoinjs-lib": "^6.1.7",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "tiny-secp256k1": "^2.2.4",
+    "zustand": "^4.4.7"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.258",
+    "@types/node": "^20.19.35",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "buffer": "^6.0.3",
+    "copy-webpack-plugin": "^11.0.0",
+    "crypto-browserify": "^3.12.1",
+    "css-loader": "^6.11.0",
+    "html-webpack-plugin": "^5.6.6",
+    "path-browserify": "^1.0.1",
+    "pngjs": "^7.0.0",
+    "sharp": "^0.34.5",
+    "stream-browserify": "^3.0.0",
+    "style-loader": "^3.3.4",
+    "ts-loader": "^9.5.4",
+    "typescript": "^5.9.3",
+    "webpack": "^5.105.3",
+    "webpack-cli": "^5.1.4"
+  }
+}

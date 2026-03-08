@@ -1,0 +1,115 @@
+.transaction-preview-card {
+  background: white;
+  border: 2px solid #667eea;
+  border-radius: 12px;
+  padding: 16px;
+  margin: 12px 0;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
+}
+
+.preview-description {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #2d3748;
+  margin-bottom: 16px;
+  white-space: pre-wrap;
+}
+
+.preview-warnings {
+  background: #fff5f5;
+  border-left: 4px solid #fc8181;
+  padding: 12px;
+  margin-bottom: 16px;
+  border-radius: 4px;
+}
+
+.warning-item {
+  font-size: 13px;
+  color: #c53030;
+  margin-bottom: 4px;
+}
+
+.warning-item:last-child {
+  margin-bottom: 0;
+}
+
+.preview-details {
+  background: #f7fafc;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 13px;
+}
+
+.detail-row.total-row {
+  border-top: 1px solid #e1e8ed;
+  margin-top: 8px;
+  padding-top: 12px;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.detail-label {
+  color: #718096;
+}
+
+.detail-value {
+  color: #2d3748;
+  font-weight: 500;
+}
+
+.preview-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.action-btn {
+  flex: 1;
+  padding: 10px 16px;
+  border-radius: 8px;
+  border: none;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.cancel-btn {
+  background: #f7fafc;
+  color: #718096;
+  border: 1px solid #e1e8ed;
+}
+
+.cancel-btn:hover {
+  background: #edf2f7;
+  border-color: #cbd5e0;
+}
+
+.edit-btn {
+  background: #edf2f7;
+  color: #4a5568;
+  border: 1px solid #cbd5e0;
+}
+
+.edit-btn:hover {
+  background: #e2e8f0;
+  border-color: #a0aec0;
+}
+
+.confirm-btn {
+  background: #48bb78;
+  color: white;
+}
+
+.confirm-btn:hover {
+  background: #38a169;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(72, 187, 120, 0.3);
+}
