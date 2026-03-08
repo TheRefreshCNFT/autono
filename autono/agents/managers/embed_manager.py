@@ -46,9 +46,11 @@ class EmbedManager(AutonomousAgent):
             capabilities=[AgentCapability.RESEARCH, AgentCapability.AUDIT],
         )
         self._store = None  # Set during orchestrator init
+        self._graph = None  # For embedding generation
         self._validation_queue: list[str] = []
         self._validated_count: int = 0
         self._stale_found: int = 0
+        self._embedded_count: int = 0
         self._batch_size: int = 50  # nodes per validation cycle
 
     @property
@@ -59,10 +61,22 @@ class EmbedManager(AutonomousAgent):
         """Inject the knowledge store (called by orchestrator)."""
         self._store = store
 
+    def set_graph(self, graph: Any) -> None:
+        """Inject the knowledge graph for embedding operations."""
+        self._graph = graph
+
     async def do_work(self) -> None:
-        """Run validation cycle based on volatility tiers."""
+        """Run validation cycle and embed any unembedded nodes."""
         if not self._store:
             return
+
+        # Phase 0: Embed any nodes missing embeddings
+        if self._graph:
+            newly_embedded = self._graph.embed_all_nodes()
+            if newly_embedded > 0:
+                self._embedded_count += newly_embedded
+                self.log.info("embed.batch_complete", count=newly_embedded,
+                              total=self._embedded_count)
 
         now = datetime.now(timezone.utc)
         nodes_checked = 0
@@ -128,6 +142,18 @@ class EmbedManager(AutonomousAgent):
                         "node_id": node_id,
                         "is_stale": stale,
                     })
+
+        elif msg.kind == "request" and msg.payload.get("type") == "embed_node":
+            # Request to embed a specific node immediately
+            node_id = msg.payload.get("node_id")
+            if node_id and self._graph:
+                embedding_hash = self._graph.embed_node(node_id)
+                self._embedded_count += 1
+                await self.send(msg.sender, "response", {
+                    "type": "embed_result",
+                    "node_id": node_id,
+                    "embedding_hash": embedding_hash,
+                })
 
         elif msg.kind == "request" and msg.payload.get("type") == "score_volatility":
             # Other managers can ask EmbedManager to score a new node
@@ -255,6 +281,7 @@ class EmbedManager(AutonomousAgent):
         base.update({
             "validated_count": self._validated_count,
             "stale_found": self._stale_found,
+            "embedded_count": self._embedded_count,
             "batch_size": self._batch_size,
         })
         return base

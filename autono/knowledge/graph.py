@@ -19,6 +19,7 @@ from typing import Any
 
 import structlog
 
+from autono.knowledge.embeddings import EmbeddingEngine
 from autono.knowledge.store import KnowledgeStore
 from autono.knowledge.types import (
     KnowledgeNode,
@@ -46,6 +47,7 @@ class QueryResult:
         self.available_paths: list[dict[str, Any]] = []
         self.hops_used: int = 0
         self.bypass_llm: bool = False       # if true, don't send to model
+        self.semantic_matches: list[dict[str, Any]] = []  # from semantic search
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -58,6 +60,7 @@ class QueryResult:
             "paths_available": len(self.available_paths),
             "hops_used": self.hops_used,
             "bypass_llm": self.bypass_llm,
+            "semantic_matches": len(self.semantic_matches),
         }
 
 
@@ -71,8 +74,129 @@ class KnowledgeGraph:
     - ExpansionManager prunes dead nodes (cascading severance)
     """
 
-    def __init__(self, store: KnowledgeStore) -> None:
+    def __init__(self, store: KnowledgeStore,
+                 embedding_engine: EmbeddingEngine | None = None) -> None:
         self.store = store
+        self.embeddings = embedding_engine or EmbeddingEngine(
+            store_path=str(store.base_path / "embeds")
+        )
+
+    # -- Semantic query (the main entry point for natural language) --------
+
+    def ask(self, question: str, top_k: int = 5,
+            threshold: float = 0.35) -> QueryResult:
+        """Ask a natural language question. The primary agent interface.
+
+        Flow:
+        1. Embed the question
+        2. Find nearest nodes by cosine similarity
+        3. For each match: check lock first (deterministic answer)
+        4. If no lock hit, gather context from matches + their links
+        5. Return result — agent decides whether to bypass LLM
+
+        This is the "find any link in the chain" operation.
+        If there's a lock on any matching node, the agent knows immediately.
+        """
+        result = QueryResult()
+
+        # Semantic search across all embedded nodes
+        matches = self.embeddings.search(question, top_k=top_k, threshold=threshold)
+        if not matches:
+            log.debug("graph.ask.no_matches", question=question[:80])
+            return result
+
+        result.semantic_matches = matches
+
+        for match in matches:
+            node_id = match["node_id"]
+            score = match["score"]
+
+            node = self.store.load_node(node_id)
+            if not node or node.status == NodeStatus.PRUNED:
+                continue
+
+            result.traversed_nodes.append(node_id)
+
+            # Lock check — the instant answer
+            if node.is_locked and node.lock_id:
+                lock = self.store.load_lock(node.lock_id)
+                if lock and lock.status == NodeStatus.ACTIVE:
+                    result.hit_lock = True
+                    result.locked_answer = lock.absolute_answer
+                    result.answer_source = lock.id
+                    result.bypass_llm = True
+                    log.info("graph.ask.lock_hit",
+                             question=question[:60],
+                             node_id=node_id,
+                             score=f"{score:.3f}",
+                             lock_id=lock.id)
+                    return result
+
+            # No lock — add as context and follow links
+            result.gathered_context.append({
+                "node_id": node_id,
+                "content": node.content,
+                "domain": node.domain,
+                "score": score,
+                "tags": node.tags,
+            })
+
+            # Follow links from this match (1 hop only for search results)
+            self._traverse_links(node, result, depth=1)
+
+        return result
+
+    def embed_node(self, node_id: str) -> str | None:
+        """Generate and store embedding for a node. Returns embedding hash."""
+        node = self.store.load_node(node_id)
+        if not node:
+            return None
+
+        # Build rich text for embedding: content + domain context + tags
+        embed_text = node.content
+        if node.domain:
+            embed_text = f"[{node.domain}] {embed_text}"
+        if node.tags:
+            embed_text += f" ({', '.join(node.tags)})"
+
+        embedding_hash = self.embeddings.embed_and_store(node_id, embed_text)
+        node.embedding_hash = embedding_hash
+        node.embedding_model = self.embeddings._model_name
+        self.store.save_node(node)
+        return embedding_hash
+
+    def embed_all_nodes(self) -> int:
+        """Batch-embed all nodes that don't have embeddings yet. Returns count."""
+        items = []
+        for node_id in list(self.store._index.get("nodes", {})):
+            if self.embeddings.has_embedding(node_id):
+                continue
+            node = self.store.load_node(node_id)
+            if not node or node.status == NodeStatus.PRUNED:
+                continue
+
+            embed_text = node.content
+            if node.domain:
+                embed_text = f"[{node.domain}] {embed_text}"
+            if node.tags:
+                embed_text += f" ({', '.join(node.tags)})"
+            items.append((node_id, embed_text))
+
+        if not items:
+            return 0
+
+        hashes = self.embeddings.embed_batch_and_store(items)
+
+        # Update nodes with embedding hashes
+        for node_id, embedding_hash in hashes.items():
+            node = self.store.load_node(node_id)
+            if node:
+                node.embedding_hash = embedding_hash
+                node.embedding_model = self.embeddings._model_name
+                self.store.save_node(node)
+
+        log.info("graph.batch_embedded", count=len(items))
+        return len(items)
 
     # -- Primary query interface ------------------------------------------
 
@@ -312,4 +436,5 @@ class KnowledgeGraph:
             **store_stats,
             "max_hops": MAX_HOPS,
             "graph_healthy": store_stats["stale_nodes"] == 0,
+            "embeddings": self.embeddings.stats(),
         }

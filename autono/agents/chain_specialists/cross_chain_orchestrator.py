@@ -92,6 +92,7 @@ class CrossChainOrchestrator:
         # Managers
         if "EmbedManager" in self.managers:
             self.managers["EmbedManager"].set_store(self.store)
+            self.managers["EmbedManager"].set_graph(self.graph)
 
         if "ExpansionManager" in self.managers:
             self.managers["ExpansionManager"].set_dependencies(
@@ -152,8 +153,19 @@ class CrossChainOrchestrator:
 
     # -- Query interface --------------------------------------------------
 
+    def ask(self, question: str, top_k: int = 5) -> dict[str, Any]:
+        """Ask a natural language question. Semantic search + lock check.
+
+        This is THE primary interface. Agents ask questions in plain English,
+        the graph finds the nearest nodes by embedding similarity, checks
+        for locks (instant deterministic answers), and returns either a
+        locked answer or gathered context.
+        """
+        result = self.graph.ask(question, top_k=top_k)
+        return result.as_dict()
+
     def query_knowledge(self, node_id: str) -> dict[str, Any]:
-        """Query the knowledge graph for a specific node.
+        """Query the knowledge graph for a specific node by ID.
 
         Returns deterministic answer if locked, or gathered context
         for the agent to reason over.

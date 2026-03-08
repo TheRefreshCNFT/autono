@@ -19,6 +19,7 @@ from autono.knowledge.types import (
     NodeStatus,
     VolatilityTier,
 )
+from autono.knowledge.embeddings import EmbeddingEngine
 from autono.knowledge.graph import KnowledgeGraph
 from autono.knowledge.store import KnowledgeStore
 
@@ -29,6 +30,7 @@ __all__ = [
     "MLock",
     "NodeStatus",
     "VolatilityTier",
+    "EmbeddingEngine",
     "KnowledgeGraph",
     "KnowledgeStore",
 ]

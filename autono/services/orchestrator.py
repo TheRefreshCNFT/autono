@@ -160,8 +160,16 @@ class Orchestrator:
         """Get knowledge layer statistics (nodes, links, locks, mlocks)."""
         return self.cross_chain.knowledge_stats()
 
+    def ask_knowledge(self, question: str) -> dict[str, Any]:
+        """Ask the knowledge graph a natural language question.
+
+        Semantic search → lock check → instant answer or context.
+        This is the primary interface for the Links & Locks system.
+        """
+        return self.cross_chain.ask(question)
+
     def query_knowledge(self, node_id: str) -> dict[str, Any]:
-        """Query the knowledge graph — returns locked answer or context."""
+        """Query the knowledge graph by node ID — returns locked answer or context."""
         return self.cross_chain.query_knowledge(node_id)
 
     def get_bridge_route(self, from_chain: str, to_chain: str) -> dict[str, Any]:
