@@ -57,6 +57,14 @@ class Orchestrator:
         # Shares the same MessageBus so all agents can communicate
         self.cross_chain = CrossChainOrchestrator(bus=self.bus)
 
+        # Wire WalletSmith to the wallet service
+        if "WalletSmith" in self.agents:
+            self.agents["WalletSmith"].set_dependencies(
+                self.cross_chain.store,
+                self.cross_chain.graph,
+                self.cross_chain.wallet,
+            )
+
         # Merge all agents into one registry for unified status/query
         self.agents.update(self.cross_chain.managers)
         self.agents.update(self.cross_chain.chain_agents)
@@ -175,3 +183,19 @@ class Orchestrator:
     def get_bridge_route(self, from_chain: str, to_chain: str) -> dict[str, Any]:
         """Get optimal cross-chain bridge route."""
         return self.cross_chain.get_bridge_route(from_chain, to_chain)
+
+    # -- Wallet shortcuts ----------------------------------------------------
+
+    def create_wallet(self, chains: list[str] | None = None) -> dict[str, Any]:
+        """Create a new multi-chain wallet via WalletService."""
+        return self.cross_chain.wallet.create_wallet(chains=chains)
+
+    def validate_address(self, address: str, chain: str = "") -> dict[str, Any]:
+        """Validate an address (auto-detects chain if not specified)."""
+        if chain:
+            return self.cross_chain.wallet.validate_address(address, chain)
+        return self.cross_chain.wallet.identify_address(address)
+
+    def wallet_status(self) -> dict[str, Any]:
+        """Get wallet service status."""
+        return self.cross_chain.wallet.stats()

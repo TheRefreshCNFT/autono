@@ -118,6 +118,9 @@ def run_semantic_queries(orch: Any) -> list[dict]:
         "What smart contract languages work on Cardano?",
         "What is Taproot used for in Bitcoin?",
         "How does BitSNARK verify ZK proofs?",
+        # Wallet queries (new — from WalletSmith knowledge seeding)
+        "What derivation path does WALI use for Cardano?",
+        "How does WALI encrypt seed phrases?",
     ]
 
     results = []
@@ -198,6 +201,52 @@ async def main() -> None:
     else:
         section("Step 3: Research Scraping (skipped)")
         print("  Use --scrape to enable live web scraping")
+
+    # Step 3.5: WALI Wallet Creation
+    section("Step 3.5: WALI Wallet Demo")
+    print("  Creating multi-chain wallet (Cardano + Bitcoin + Night Chain)...")
+    t0 = time.time()
+    wallet_result = orch.wallet.create_wallet(
+        chains=["cardano", "bitcoin", "night_chain"]
+    )
+    elapsed_ms = (time.time() - t0) * 1000
+
+    print(f"  Wallet created in {elapsed_ms:.0f}ms")
+    print(f"  Wallet ID: {wallet_result['wallet_id']}")
+    for chain, addr in wallet_result["addresses"].items():
+        print(f"  {chain}: {addr}")
+    for chain, path in wallet_result["derivation_paths"].items():
+        print(f"  {chain} path: {path}")
+
+    # Validate the generated addresses
+    print("\n  Address validation:")
+    for chain, addr in wallet_result["addresses"].items():
+        validation = orch.wallet.validate_address(addr, chain)
+        status = "VALID" if validation.get("valid") else "INVALID"
+        addr_type = validation.get("type", "?")
+        print(f"    {chain} [{status}] type={addr_type}")
+
+    # Auto-detect addresses
+    print("\n  Auto-detection:")
+    for chain, addr in wallet_result["addresses"].items():
+        detected = orch.wallet.identify_address(addr)
+        print(f"    {addr[:20]}... → {detected.get('chain', '?')} ({detected.get('type', '?')})")
+
+    # Generate all Bitcoin address types
+    import hashlib as hl
+    seed = hl.pbkdf2_hmac("sha512", b"test_mnemonic", b"mnemonic", 2048, dklen=64)
+    all_btc_types = orch.wallet.generate_all_bitcoin_types(seed)
+    print("\n  All Bitcoin address types from same key:")
+    for addr_type, wallet_addr in all_btc_types.items():
+        print(f"    {addr_type}: {wallet_addr.address[:30]}... ({wallet_addr.derivation_path})")
+
+    # Fee estimates
+    print("\n  Fee estimates:")
+    for chain in ["cardano", "bitcoin"]:
+        fee = orch.wallet.estimate_fees(chain)
+        print(f"    {chain}: slow={fee.slow} med={fee.medium} fast={fee.fast} {fee.unit}")
+
+    print(f"\n  Wallet service: {orch.wallet.stats()}")
 
     # Step 4: Generate embeddings
     section("Step 4: Generating Embeddings")
@@ -281,8 +330,10 @@ async def main() -> None:
         })
 
     banner("BOOTSTRAP COMPLETE")
+    wallet_stats = orch.wallet.stats()
     print(f"\n  {count} protocol facts seeded")
     print(f"  {embedded} embeddings generated")
+    print(f"  {wallet_stats['wallets_created']} wallet(s) created ({', '.join(wallet_stats['supported_chains'])})")
     print(f"  {lock_hits}/{len(query_results)} queries answered WITHOUT inference")
     if do_scrape:
         total_pages = sum(r.get("pages_scraped", 0) for r in scrape_results.values())

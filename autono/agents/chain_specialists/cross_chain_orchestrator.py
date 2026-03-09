@@ -39,6 +39,7 @@ import structlog
 from autono.core.message_bus import MessageBus
 from autono.knowledge.graph import KnowledgeGraph
 from autono.knowledge.store import KnowledgeStore
+from autono.services.wallet_service import WalletService
 
 # Managers
 from autono.agents.managers import ALL_MANAGERS
@@ -57,13 +58,20 @@ class CrossChainOrchestrator:
     """
 
     def __init__(self, bus: MessageBus | None = None,
-                 knowledge_path: str | None = None) -> None:
+                 knowledge_path: str | None = None,
+                 network: str | None = None) -> None:
         # Use existing bus or create new one
         self.bus = bus or MessageBus()
 
         # Knowledge layer — the brain
         self.store = KnowledgeStore(base_path=knowledge_path)
         self.graph = KnowledgeGraph(store=self.store)
+
+        # Wallet service — the hands
+        self.wallet = WalletService(
+            network=network or "testnet"
+        )
+        self.wallet.set_dependencies(self.store, self.graph)
 
         # Boot managers
         self.managers: dict[str, Any] = {}
@@ -116,6 +124,10 @@ class CrossChainOrchestrator:
         for agent in self.chain_agents.values():
             if hasattr(agent, "set_dependencies"):
                 agent.set_dependencies(self.store, self.graph)
+
+        # WalletSmith gets the wallet service too
+        # (WalletSmith is in the main Orchestrator's agent list, not here,
+        #  so it's wired from the main Orchestrator via self.wallet)
 
     async def start(self) -> None:
         """Launch all managers and chain specialists."""
