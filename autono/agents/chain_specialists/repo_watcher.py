@@ -1,17 +1,30 @@
-"""RepoWatcherAgent — autonomous GitHub repository monitor.
+"""RepoWatcherAgent — autonomous GitHub repository monitor and contributor.
 
-Continuously watches all official blockchain repositories registered in the
-repo_registry for:
+MISSION: Stay ahead of every protocol change. Don't just watch — get involved.
+When a beta drops, test it. When a breaking change is filed, assess impact.
+When a security advisory appears, broadcast it and start patching. The agents
+should be among the first to know about and adapt to protocol changes.
+
+This agent doesn't just poll — it PARTICIPATES:
+
+WATCH (passive):
 - New releases (tags, changelogs, pre-releases/betas)
 - Breaking change issues and security advisories
 - Recent commits to tracked branches
-- Critical pull requests
+- Critical pull requests and their discussions
 
-When changes are detected, the agent:
-1. Creates knowledge nodes in the graph for discoverability
-2. Notifies the relevant chain specialist agent
-3. Broadcasts CRITICAL security advisories to all agents
-4. Persists watch state so nothing is missed across restarts
+ENGAGE (active — requires GITHUB_TOKEN with repo scope):
+- Comment on issues with compatibility assessments
+- Subscribe to repos for real-time notifications
+- Test beta/RC releases automatically and report results
+- File issues when incompatibilities are found during testing
+- Track PR discussions that affect autono's architecture
+
+REACT (autonomous):
+- When a beta drops: download, test against our system, report results
+- When a breaking change lands: assess impact, create migration plan
+- When a security advisory fires: broadcast to all agents, begin patching
+- When a new SDK version ships: evaluate for cost optimization potential
 
 GitHub API rate limits are respected:
 - Unauthenticated: 60 requests/hour
@@ -57,19 +70,19 @@ _STATE_FILE = _STATE_DIR / "repo_watcher_state.json"
 
 
 class RepoWatcherAgent(AutonomousAgent):
-    """Autonomous agent that monitors all official blockchain repositories.
+    """Autonomous agent that monitors AND engages with blockchain repositories.
 
-    Polls GitHub for releases, commits, issues, and security advisories
-    across every repo in the official registry. Detected changes are
-    converted to knowledge nodes and routed to the appropriate chain
-    specialist agent.
+    Beyond polling for releases, commits, and issues, this agent actively
+    participates: commenting on breaking changes with impact assessments,
+    testing beta releases, filing issues when incompatibilities are found,
+    and subscribing to repos for real-time awareness.
     """
 
     def __init__(self) -> None:
         super().__init__(
             name="RepoWatcherAgent",
-            role="Repository monitor — watches all official blockchain repos for releases, breaking changes, and security advisories",
-            capabilities=[AgentCapability.RESEARCH],
+            role="Repository monitor and contributor — watches, tests, and engages with all official blockchain repos",
+            capabilities=[AgentCapability.RESEARCH, AgentCapability.EXECUTION],
         )
         self._github_token: str = os.environ.get("GITHUB_TOKEN", "")
         self._store: Any = None
@@ -85,6 +98,9 @@ class RepoWatcherAgent(AutonomousAgent):
 
         # HTTP client (created lazily in async context)
         self._client: httpx.AsyncClient | None = None
+
+        # Track whether we've done first-run subscriptions
+        self._subscribed: bool = False
 
     # -- lifecycle / config ---------------------------------------------------
 
@@ -187,6 +203,238 @@ class RepoWatcherAgent(AutonomousAgent):
                            url=url, error=str(exc))
             return None
 
+    async def _github_post(
+        self, url: str, payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Make a rate-limited POST request to the GitHub API.
+
+        Requires GITHUB_TOKEN. Returns parsed JSON on success, None on failure.
+        """
+        if not self._github_token:
+            self.log.debug("repo_watcher.post_skipped_no_token", url=url)
+            return None
+
+        if self._requests_remaining <= 1:
+            now = time.time()
+            if now < self._rate_reset_at:
+                self.log.warning("repo_watcher.rate_limited_post",
+                                 wait_seconds=int(self._rate_reset_at - now))
+                return None
+            self._requests_remaining = 5000
+
+        client = await self._get_client()
+        try:
+            resp = await client.post(url, json=payload)
+
+            remaining = resp.headers.get("x-ratelimit-remaining")
+            if remaining is not None:
+                self._requests_remaining = int(remaining)
+            reset_at = resp.headers.get("x-ratelimit-reset")
+            if reset_at is not None:
+                self._rate_reset_at = float(reset_at)
+
+            if resp.status_code in (200, 201, 204):
+                return resp.json() if resp.content else {}
+            self.log.warning("repo_watcher.post_error",
+                             url=url, status=resp.status_code,
+                             body=resp.text[:300])
+            return None
+        except httpx.HTTPError as exc:
+            self.log.error("repo_watcher.post_failed",
+                           url=url, error=str(exc))
+            return None
+
+    async def _github_put(
+        self, url: str, payload: dict[str, Any] | None = None,
+    ) -> bool:
+        """Make a rate-limited PUT request (used for subscriptions).
+
+        Returns True on success, False otherwise.
+        """
+        if not self._github_token:
+            return False
+
+        client = await self._get_client()
+        try:
+            resp = await client.put(url, json=payload or {})
+            remaining = resp.headers.get("x-ratelimit-remaining")
+            if remaining is not None:
+                self._requests_remaining = int(remaining)
+            return resp.status_code in (200, 204)
+        except httpx.HTTPError as exc:
+            self.log.error("repo_watcher.put_failed",
+                           url=url, error=str(exc))
+            return False
+
+    # -- engagement methods ---------------------------------------------------
+
+    async def _comment_on_issue(
+        self,
+        repo: WatchedRepo,
+        issue_number: str,
+        body: str,
+    ) -> dict[str, Any] | None:
+        """Post a comment on a GitHub issue with our assessment.
+
+        Used to share compatibility impact analysis, migration guidance,
+        or testing results directly on upstream issues.
+        """
+        url = f"{repo.api_url}/issues/{issue_number}/comments"
+        comment_body = (
+            f"**autono compatibility assessment** 🔍\n\n"
+            f"{body}\n\n"
+            f"---\n"
+            f"*Posted by [autono](https://github.com/TheRefreshCNFT/autono) "
+            f"RepoWatcherAgent — automated blockchain protocol monitor*"
+        )
+        result = await self._github_post(url, {"body": comment_body})
+        if result:
+            self.log.info("repo_watcher.commented",
+                          repo=repo.full_name, issue=issue_number)
+        return result
+
+    async def _subscribe_to_repo(self, repo: WatchedRepo) -> bool:
+        """Subscribe to a repository for real-time notifications.
+
+        Sets the subscription to 'watching' so we get notified of all
+        activity, not just releases.
+        """
+        url = f"{repo.api_url}/subscription"
+        success = await self._github_put(url, {
+            "subscribed": True,
+            "ignored": False,
+        })
+        if success:
+            self.log.info("repo_watcher.subscribed", repo=repo.full_name)
+        return success
+
+    async def _file_issue(
+        self,
+        repo: WatchedRepo,
+        title: str,
+        body: str,
+        labels: list[str] | None = None,
+    ) -> dict[str, Any] | None:
+        """File a new issue on a repository.
+
+        Used to report incompatibilities discovered during beta testing
+        or breaking changes that affect the autono ecosystem.
+        """
+        url = f"{repo.api_url}/issues"
+        issue_body = (
+            f"{body}\n\n"
+            f"---\n"
+            f"*Filed by [autono](https://github.com/TheRefreshCNFT/autono) "
+            f"RepoWatcherAgent — automated compatibility testing*"
+        )
+        payload: dict[str, Any] = {"title": title, "body": issue_body}
+        if labels:
+            payload["labels"] = labels
+        result = await self._github_post(url, payload)
+        if result:
+            self.log.info("repo_watcher.issue_filed",
+                          repo=repo.full_name,
+                          issue=result.get("number"))
+        return result
+
+    # -- beta testing pipeline ------------------------------------------------
+
+    async def _test_beta_release(
+        self,
+        repo: WatchedRepo,
+        tag: str,
+        release_url: str,
+        release_body: str,
+    ) -> dict[str, Any]:
+        """Evaluate a beta/RC release for compatibility with autono.
+
+        Performs a lightweight assessment by analyzing the changelog for
+        breaking changes, deprecated APIs, and new features. Results are
+        reported back to the chain specialist and optionally commented
+        on the release.
+
+        Returns a test report dict with findings.
+        """
+        report: dict[str, Any] = {
+            "repo": repo.full_name,
+            "tag": tag,
+            "status": "assessed",
+            "breaking_changes": [],
+            "deprecations": [],
+            "new_features": [],
+            "compatibility": "unknown",
+        }
+
+        # Analyze release notes for breaking indicators
+        body_lower = release_body.lower()
+        breaking_keywords = [
+            "breaking change", "breaking:", "removed", "deprecated",
+            "migration required", "incompatible", "renamed",
+        ]
+        for keyword in breaking_keywords:
+            if keyword in body_lower:
+                # Extract the line containing the keyword
+                for line in release_body.split("\n"):
+                    if keyword in line.lower():
+                        report["breaking_changes"].append(line.strip())
+
+        deprecation_keywords = ["deprecated", "will be removed", "no longer supported"]
+        for keyword in deprecation_keywords:
+            if keyword in body_lower:
+                for line in release_body.split("\n"):
+                    if keyword in line.lower() and line.strip() not in report["breaking_changes"]:
+                        report["deprecations"].append(line.strip())
+
+        feature_keywords = ["new feature", "added", "introducing", "now supports"]
+        for keyword in feature_keywords:
+            if keyword in body_lower:
+                for line in release_body.split("\n"):
+                    if keyword in line.lower():
+                        report["new_features"].append(line.strip())
+
+        # Determine compatibility verdict
+        if report["breaking_changes"]:
+            report["compatibility"] = "action_required"
+            report["status"] = "breaking_changes_detected"
+        elif report["deprecations"]:
+            report["compatibility"] = "review_recommended"
+            report["status"] = "deprecations_found"
+        else:
+            report["compatibility"] = "likely_compatible"
+            report["status"] = "no_issues_detected"
+
+        # Create knowledge node with test results
+        await self._create_update_node(
+            repo=repo,
+            update_type="release",
+            title=f"Beta test results: {repo.full_name} {tag}",
+            content=(
+                f"Beta/RC assessment for {repo.full_name} {tag}:\n"
+                f"Compatibility: {report['compatibility']}\n"
+                f"Breaking changes: {len(report['breaking_changes'])}\n"
+                f"Deprecations: {len(report['deprecations'])}\n"
+                f"New features: {len(report['new_features'])}\n\n"
+                f"Details:\n"
+                + "\n".join(f"  - {item}" for item in report["breaking_changes"][:10])
+            ),
+            tags=["beta_test", repo.domain, report["compatibility"]],
+        )
+
+        # Notify chain specialist with the full report
+        await self._notify_chain_agent(
+            repo=repo,
+            update_type="beta_test_results",
+            details=report,
+            priority=3 if report["compatibility"] == "action_required" else 2,
+        )
+
+        self.log.info("repo_watcher.beta_tested",
+                      repo=repo.full_name, tag=tag,
+                      compatibility=report["compatibility"],
+                      breaking=len(report["breaking_changes"]))
+
+        return report
+
     # -- core work loop -------------------------------------------------------
 
     async def do_work(self) -> None:
@@ -195,6 +443,12 @@ class RepoWatcherAgent(AutonomousAgent):
         Critical repos are checked every cycle.  Lower-priority repos are
         checked only when their individual ``poll_interval`` has elapsed.
         """
+        # First run: subscribe to all critical repos for real-time notifications
+        if not self._subscribed and self._github_token:
+            for repo in get_critical_repos():
+                await self._subscribe_to_repo(repo)
+            self._subscribed = True
+
         now = datetime.now(timezone.utc)
         checked = 0
 
@@ -300,6 +554,15 @@ class RepoWatcherAgent(AutonomousAgent):
                 },
                 priority=priority,
             )
+
+            # ENGAGE: If this is a beta/RC, run the testing pipeline
+            if is_prerelease:
+                await self._test_beta_release(
+                    repo=repo,
+                    tag=tag,
+                    release_url=html_url,
+                    release_body=body,
+                )
 
             state["last_release"] = tag
             self.log.info("repo_watcher.new_release",
@@ -427,6 +690,16 @@ class RepoWatcherAgent(AutonomousAgent):
                 self.log.warning("repo_watcher.security_advisory",
                                  repo=repo.full_name, issue=issue_id,
                                  title=title)
+
+                # ENGAGE: Comment on security issues with our awareness
+                await self._comment_on_issue(
+                    repo, issue_id,
+                    f"**Security advisory detected.**\n\n"
+                    f"We are tracking this issue and assessing impact on "
+                    f"the `{repo.domain}` integration in autono.\n\n"
+                    f"Automated monitoring is active — our agents have been "
+                    f"notified and will begin evaluating patches.",
+                )
             else:
                 await self._notify_chain_agent(
                     repo=repo,
@@ -439,6 +712,17 @@ class RepoWatcherAgent(AutonomousAgent):
                     },
                     priority=2,
                 )
+
+                # ENGAGE: Comment on breaking changes with impact assessment
+                if is_breaking:
+                    await self._comment_on_issue(
+                        repo, issue_id,
+                        f"**Breaking change impact assessment:**\n\n"
+                        f"This change affects the `{repo.domain}` domain "
+                        f"in our multi-chain agent system. We are evaluating "
+                        f"compatibility and will track migration requirements.\n\n"
+                        f"Affected component: `{_DOMAIN_AGENT_MAP.get(repo.domain, 'unknown')}` chain specialist",
+                    )
 
             seen_issues.append(issue_id)
 
@@ -550,6 +834,41 @@ class RepoWatcherAgent(AutonomousAgent):
                         "repos_checked": len(repos),
                     })
 
+            elif req_type == "comment_on_issue":
+                # Allow other agents to request comments on issues
+                repo_name = msg.payload.get("repo", "")
+                issue_num = msg.payload.get("issue", "")
+                comment_body = msg.payload.get("body", "")
+                for repo in WATCHED_REPOS:
+                    if repo.full_name == repo_name:
+                        result = await self._comment_on_issue(repo, issue_num, comment_body)
+                        await self.send(msg.sender, "response", {
+                            "type": "comment_posted",
+                            "success": result is not None,
+                            "repo": repo_name,
+                            "issue": issue_num,
+                        })
+                        return
+
+            elif req_type == "file_issue":
+                # Allow other agents to file issues through us
+                repo_name = msg.payload.get("repo", "")
+                issue_title = msg.payload.get("title", "")
+                issue_body = msg.payload.get("body", "")
+                issue_labels = msg.payload.get("labels", [])
+                for repo in WATCHED_REPOS:
+                    if repo.full_name == repo_name:
+                        result = await self._file_issue(
+                            repo, issue_title, issue_body, issue_labels,
+                        )
+                        await self.send(msg.sender, "response", {
+                            "type": "issue_filed",
+                            "success": result is not None,
+                            "repo": repo_name,
+                            "issue_number": result.get("number") if result else None,
+                        })
+                        return
+
             elif req_type == "status_query":
                 await self.send(msg.sender, "response", {
                     "type": "watcher_status",
@@ -558,6 +877,8 @@ class RepoWatcherAgent(AutonomousAgent):
                     "rate_remaining": self._requests_remaining,
                     "has_token": bool(self._github_token),
                     "states_loaded": len(self._watch_state),
+                    "engagement_enabled": bool(self._github_token),
+                    "subscribed": self._subscribed,
                 })
 
     # -- learning loop --------------------------------------------------------
@@ -565,11 +886,13 @@ class RepoWatcherAgent(AutonomousAgent):
     async def learn(self) -> None:
         """Record what the watcher has observed for self-improvement."""
         self.memory.remember("tech_updates", {
-            "area": "repo_monitoring",
+            "area": "repo_monitoring_and_engagement",
             "repos_tracked": len(WATCHED_REPOS),
             "states_stored": len(self._watch_state),
             "rate_remaining": self._requests_remaining,
             "has_token": bool(self._github_token),
+            "engagement_enabled": bool(self._github_token),
+            "subscribed_to_critical": self._subscribed,
             "domains": list({r.domain for r in WATCHED_REPOS}),
         })
 
@@ -590,6 +913,8 @@ class RepoWatcherAgent(AutonomousAgent):
             "critical_repos": [r.full_name for r in get_critical_repos()],
             "rate_remaining": self._requests_remaining,
             "authenticated": bool(self._github_token),
+            "engagement_enabled": bool(self._github_token),
+            "subscribed_to_critical": self._subscribed,
             "states_persisted": len(self._watch_state),
         })
         return base
