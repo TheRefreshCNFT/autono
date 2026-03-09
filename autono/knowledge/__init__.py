@@ -22,6 +22,8 @@ from autono.knowledge.types import (
 from autono.knowledge.embeddings import EmbeddingEngine
 from autono.knowledge.graph import KnowledgeGraph
 from autono.knowledge.store import KnowledgeStore
+from autono.knowledge.protocol_facts import ALL_PROTOCOL_FACTS, FACTS_BY_DOMAIN
+from autono.knowledge.repo_registry import WATCHED_REPOS
 
 __all__ = [
     "KnowledgeNode",
@@ -33,4 +35,7 @@ __all__ = [
     "EmbeddingEngine",
     "KnowledgeGraph",
     "KnowledgeStore",
+    "ALL_PROTOCOL_FACTS",
+    "FACTS_BY_DOMAIN",
+    "WATCHED_REPOS",
 ]
