@@ -23,10 +23,10 @@ Architecture:
   │  Knowledge Layer  │  │    Managers        │  │  Chain Specialists   │
   │  ├─ Store (JSON)  │  │  ├─ Throttle      │  │  ├─ Cardano          │
   │  ├─ Graph         │  │  ├─ Embed         │  │  ├─ Bitcoin          │
-  │  └─ Links/Locks   │  │  ├─ Expansion     │  │  ├─ Night            │
-  │                    │  │  ├─ Research      │  │  └─ Charms           │
-  │                    │  │  ├─ Link (Doctor) │  │                      │
-  │                    │  │  └─ Lock (Healer) │  │                      │
+  │  ├─ Links/Locks   │  │  ├─ Expansion     │  │  ├─ Night            │
+  │  ├─ Protocol Facts│  │  ├─ Research      │  │  ├─ Charms           │
+  │  ├─ Repo Registry │  │  ├─ Link (Doctor) │  │  ├─ RepoWatcher      │
+  │  └─ Expansion Eng │  │  └─ Lock (Healer) │  │  └─ SpellCaster      │
   └──────────────────┘  └───────────────────┘  └──────────────────────┘
 """
 
@@ -39,6 +39,8 @@ import structlog
 from autono.core.message_bus import MessageBus
 from autono.knowledge.graph import KnowledgeGraph
 from autono.knowledge.store import KnowledgeStore
+from autono.knowledge.expansion import KnowledgeExpansionEngine
+from autono.services.scraper import Scraper
 from autono.services.wallet_service import WalletService
 
 # Managers
@@ -86,6 +88,14 @@ class CrossChainOrchestrator:
             agent = agent_cls()
             self.chain_agents[agent.name] = agent
             self.bus.register(agent)
+
+        # Knowledge expansion engine — fills the brain
+        self.scraper = Scraper()
+        self.expansion = KnowledgeExpansionEngine(
+            store=self.store,
+            scraper=self.scraper,
+            graph=self.graph,
+        )
 
         # Inject dependencies
         self._inject_dependencies()
@@ -197,6 +207,59 @@ class CrossChainOrchestrator:
             route_key = f"{from_chain}_to_{to_chain}"
             return agent._bridge_routes.get(route_key, {"error": "no_route"})
         return {"error": "charms_agent_not_found"}
+
+    # -- Brain expansion --------------------------------------------------
+
+    def seed_brain(self) -> dict[str, Any]:
+        """Seed all 162+ protocol facts into the knowledge graph as Locks.
+
+        This is the first step to 100% brain coverage. Call this on first boot.
+        """
+        return self.expansion.seed_all_facts()
+
+    def expand_brain(self) -> dict[str, Any]:
+        """Run full brain expansion: seed, scrape, link, validate, gap-check."""
+        return self.expansion.run_full_expansion()
+
+    def brain_status(self) -> dict[str, Any]:
+        """Get brain coverage report — how close to 100%."""
+        return self.expansion.get_brain_status()
+
+    # -- Spell interface --------------------------------------------------
+
+    def cast_spell(self, spell_type: str, **kwargs: Any) -> dict[str, Any]:
+        """Create and queue a cross-chain spell via SpellCasterAgent.
+
+        Example:
+            orchestrator.cast_spell("btc_to_ada",
+                inputs=[{"txid": "abc...", "vout": 0}],
+                outputs=[{"address": "addr1...", "chain": "cardano"}])
+        """
+        if "SpellCasterAgent" not in self.chain_agents:
+            return {"error": "spell_caster_not_found"}
+
+        # Use template if it exists, otherwise raw spell type
+        from autono.agents.chain_specialists.spell_caster import SPELL_TEMPLATES
+        if spell_type in SPELL_TEMPLATES:
+            payload = {**SPELL_TEMPLATES[spell_type], **kwargs}
+        else:
+            payload = {"spell_type": spell_type, **kwargs}
+
+        # Synchronous spell creation (bypasses message bus for direct calls)
+        caster = self.chain_agents["SpellCasterAgent"]
+        import asyncio
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # Can't await in sync context — queue it
+            return {"status": "queued", "spell_type": spell_type,
+                    "message": "Spell queued. Use message bus for async creation."}
+        return loop.run_until_complete(caster._on_create_spell(payload))
+
+    def spell_status(self) -> dict[str, Any]:
+        """Get status of all active spells."""
+        if "SpellCasterAgent" in self.chain_agents:
+            return self.chain_agents["SpellCasterAgent"].report()
+        return {"error": "spell_caster_not_found"}
 
     # -- Status -----------------------------------------------------------
 
