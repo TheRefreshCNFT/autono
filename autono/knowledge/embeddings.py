@@ -52,8 +52,16 @@ class EmbeddingEngine:
         """Lazy-load the sentence-transformers model."""
         if self._model is not None:
             return
+        if self._model is False:  # previously failed to load
+            raise ImportError("sentence_transformers not available")
 
-        from sentence_transformers import SentenceTransformer
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError:
+            log.warning("embedding.no_sentence_transformers",
+                        hint="pip install sentence-transformers for embedding support")
+            self._model = False  # sentinel: don't retry
+            raise
 
         log.info("embedding.loading_model", model=self._model_name)
         self._model = SentenceTransformer(self._model_name)

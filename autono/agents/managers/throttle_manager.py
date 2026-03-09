@@ -264,11 +264,10 @@ class ThrottleManager(AutonomousAgent):
             result["memory_percent"] = 0.0
 
         try:
-            stat = os.statvfs("/")
-            total = stat.f_blocks * stat.f_frsize
-            free = stat.f_bfree * stat.f_frsize
-            result["disk_percent"] = ((total - free) / total * 100) if total else 0
-        except OSError:
+            import shutil
+            usage = shutil.disk_usage("/")
+            result["disk_percent"] = (usage.used / usage.total * 100) if usage.total else 0
+        except (OSError, AttributeError):
             result["disk_percent"] = 0.0
 
         return result

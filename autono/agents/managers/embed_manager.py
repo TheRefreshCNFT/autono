@@ -72,7 +72,10 @@ class EmbedManager(AutonomousAgent):
 
         # Phase 0: Embed any nodes missing embeddings
         if self._graph:
-            newly_embedded = self._graph.embed_all_nodes()
+            try:
+                newly_embedded = self._graph.embed_all_nodes()
+            except ImportError:
+                newly_embedded = 0  # sentence_transformers not installed; skip silently
             if newly_embedded > 0:
                 self._embedded_count += newly_embedded
                 self.log.info("embed.batch_complete", count=newly_embedded,
