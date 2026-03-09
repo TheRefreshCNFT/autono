@@ -82,7 +82,7 @@ class RepoWatcherAgent(AutonomousAgent):
         super().__init__(
             name="RepoWatcherAgent",
             role="Repository monitor and contributor — watches, tests, and engages with all official blockchain repos",
-            capabilities=[AgentCapability.RESEARCH, AgentCapability.EXECUTION],
+            capabilities=[AgentCapability.RESEARCH, AgentCapability.ENGAGE],
         )
         self._github_token: str = os.environ.get("GITHUB_TOKEN", "")
         self._store: Any = None

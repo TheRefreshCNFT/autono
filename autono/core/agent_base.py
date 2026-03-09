@@ -53,6 +53,7 @@ class AgentCapability(str, Enum):
     RUN_VALIDATOR = "run_validator"
     RESEARCH = "research"
     MARKET = "market"
+    ENGAGE = "engage"
     AUDIT = "audit"
     MANAGE_TREASURY = "manage_treasury"
     HIRE = "hire"
