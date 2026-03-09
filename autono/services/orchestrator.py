@@ -20,6 +20,7 @@ from autono.agents import ALL_AGENTS
 from autono.core.autonomy import AutonomyEngine, Priority
 from autono.core.council import HumanCouncil
 from autono.core.message_bus import MessageBus
+from autono.rollup.engine import RollupEngine, EngineConfig
 from autono.sidechain.block import BlockChain
 from autono.sidechain.bridge import CardanoBridge
 from autono.sidechain.consensus import OuroborosTurbo
@@ -45,6 +46,9 @@ class Orchestrator:
         self.blockchain = BlockChain()
         self.bridge = CardanoBridge()
         self.state = StateManager()
+
+        # Rollup engine — batch settlement layer for L1 cost reduction
+        self.rollup = RollupEngine()
 
         # Core agents — the original 13
         self.agents = {}
@@ -170,7 +174,12 @@ class Orchestrator:
             "blockchain": self.blockchain.stats(),
             "bridge": self.bridge.status(),
             "state": self.state.stats(),
+            "rollup": self.rollup.stats(),
         }
+
+    def rollup_status(self) -> dict[str, Any]:
+        """Get rollup engine status — pool, settlement history, state root."""
+        return self.rollup.stats()
 
     def cross_chain_status(self) -> dict[str, Any]:
         """Get cross-chain system status (managers, chain agents, knowledge)."""

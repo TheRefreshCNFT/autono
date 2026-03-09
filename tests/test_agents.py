@@ -27,7 +27,7 @@ def test_each_agent_instantiates():
 
 def test_orchestrator_creates_all_agents():
     orch = Orchestrator()
-    assert len(orch.agents) == 13
+    assert len(orch.agents) == 25
 
 
 def test_agent_names_are_unique():
@@ -73,7 +73,7 @@ def test_human_council_query():
 def test_human_council_all_reports():
     orch = Orchestrator()
     reports = orch.status()
-    assert len(reports) == 13
+    assert len(reports) == 25
 
 
 def test_chain_status():
