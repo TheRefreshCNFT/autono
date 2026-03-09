@@ -40,6 +40,7 @@ from autono.core.message_bus import MessageBus
 from autono.knowledge.graph import KnowledgeGraph
 from autono.knowledge.store import KnowledgeStore
 from autono.knowledge.expansion import KnowledgeExpansionEngine
+from autono.services.blockfrost import BlockfrostClient
 from autono.services.scraper import Scraper
 from autono.services.wallet_service import WalletService
 
@@ -69,9 +70,12 @@ class CrossChainOrchestrator:
         self.store = KnowledgeStore(base_path=knowledge_path)
         self.graph = KnowledgeGraph(store=self.store)
 
+        # Blockfrost client — the eyes (chain data)
+        self.blockfrost = BlockfrostClient()
+
         # Wallet service — the hands
         self.wallet = WalletService(
-            network=network or "testnet"
+            network=network or self.blockfrost.network
         )
         self.wallet.set_dependencies(self.store, self.graph)
 

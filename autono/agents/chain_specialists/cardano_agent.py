@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import Any
 
 from autono.core.agent_base import AgentCapability, AutonomousAgent, Message
+from autono.services.blockfrost import BlockfrostClient, BlockfrostError
 
 
 class CardanoChainAgent(AutonomousAgent):
@@ -28,6 +29,9 @@ class CardanoChainAgent(AutonomousAgent):
     Wraps the WALI wallet's Cardano module and adds protocol intelligence
     through the knowledge graph. Knows when to defer to CharmsAgent for
     cross-chain token operations.
+
+    Uses Blockfrost for live chain queries (UTXOs, balances, protocol params,
+    transactions, assets). API key loaded from environment — never exposed.
     """
 
     def __init__(self) -> None:
@@ -44,6 +48,8 @@ class CardanoChainAgent(AutonomousAgent):
         )
         self._graph = None
         self._store = None
+        self._blockfrost = BlockfrostClient()
+        self._chain_synced = False
 
         # Cardano-specific protocol knowledge (seed data for Locks)
         self._protocol_facts: list[dict[str, Any]] = [
@@ -149,6 +155,10 @@ class CardanoChainAgent(AutonomousAgent):
             })
             self._research_requested = True
 
+        # Sync chain tip and protocol params periodically
+        if self._blockfrost.is_configured:
+            await self._sync_chain_state()
+
     async def handle_message(self, msg: Message) -> None:
         if msg.kind == "request":
             req_type = msg.payload.get("type", "")
@@ -184,6 +194,50 @@ class CardanoChainAgent(AutonomousAgent):
                 await self.send(msg.sender, "response", {
                     "type": "transaction_built",
                     **result,
+                })
+
+            # --- Live chain queries via Blockfrost ---
+
+            elif req_type == "get_balance":
+                address = msg.payload.get("address", "")
+                result = await self._get_balance(address)
+                await self.send(msg.sender, "response", {
+                    "type": "balance_result", **result,
+                })
+
+            elif req_type == "get_utxos":
+                address = msg.payload.get("address", "")
+                asset = msg.payload.get("asset")
+                result = await self._get_utxos(address, asset)
+                await self.send(msg.sender, "response", {
+                    "type": "utxo_result", **result,
+                })
+
+            elif req_type == "get_tx":
+                tx_hash = msg.payload.get("tx_hash", "")
+                result = await self._get_transaction(tx_hash)
+                await self.send(msg.sender, "response", {
+                    "type": "tx_result", **result,
+                })
+
+            elif req_type == "get_asset":
+                asset_id = msg.payload.get("asset_id", "")
+                result = await self._get_asset(asset_id)
+                await self.send(msg.sender, "response", {
+                    "type": "asset_result", **result,
+                })
+
+            elif req_type == "submit_tx":
+                tx_cbor = msg.payload.get("tx_cbor", b"")
+                result = await self._submit_transaction(tx_cbor)
+                await self.send(msg.sender, "response", {
+                    "type": "tx_submitted", **result,
+                })
+
+            elif req_type == "chain_tip":
+                result = await self._get_chain_tip()
+                await self.send(msg.sender, "response", {
+                    "type": "chain_tip_result", **result,
                 })
 
             elif req_type == "get_protocol_param":
@@ -286,13 +340,136 @@ class CardanoChainAgent(AutonomousAgent):
         return {"found": False}
 
     async def _build_cardano_tx(self, payload: dict) -> dict[str, Any]:
-        """Build a Cardano transaction using knowledge-enhanced routing."""
+        """Build a Cardano transaction using knowledge-enhanced routing.
+
+        Uses Blockfrost for UTXO selection and protocol params.
+        """
+        address = payload.get("from_address", "")
+
+        # Get protocol params for fee calculation
+        try:
+            params = await self._blockfrost.protocol_params()
+            utxos = await self._blockfrost.address_utxos(address) if address else []
+        except BlockfrostError as e:
+            return {"status": "error", "error": str(e)}
+
         return {
             "status": "ready",
             "chain": "cardano",
+            "utxo_count": len(utxos),
+            "protocol_params_available": bool(params),
             "requires": ["utxo_selection", "fee_calculation", "signing"],
             "cross_chain": payload.get("to_chain", "") != "",
         }
+
+    # -- Blockfrost-backed chain queries ------------------------------------
+
+    async def _sync_chain_state(self) -> None:
+        """Periodically sync chain tip and protocol params into knowledge."""
+        try:
+            tip = await self._blockfrost.tip()
+            if tip and self._store:
+                from autono.knowledge.types import KnowledgeNode, VolatilityTier
+
+                # Store chain tip as a volatile node (changes every ~20s)
+                node = KnowledgeNode(
+                    content=f"Cardano chain tip: block {tip.get('block')}, "
+                            f"slot {tip.get('slot')}, epoch {tip.get('epoch')}",
+                    domain="cardano",
+                    subdomain="chain_state",
+                    volatility=VolatilityTier.REALTIME,
+                    tags=["chain_tip", "block", "slot", "epoch"],
+                )
+                self._store.save_node(node)
+
+                if not self._chain_synced:
+                    self.log.info("cardano.chain_synced",
+                                 block=tip.get("block"),
+                                 epoch=tip.get("epoch"),
+                                 network=self._blockfrost.network)
+                    self._chain_synced = True
+
+        except BlockfrostError as e:
+            self.log.warning("cardano.sync_failed", error=str(e))
+
+    async def _get_balance(self, address: str) -> dict[str, Any]:
+        """Get ADA balance and native tokens for an address."""
+        try:
+            lovelace = await self._blockfrost.get_ada_balance(address)
+            tokens = await self._blockfrost.get_native_tokens(address)
+            ada = lovelace / 1_000_000
+            return {
+                "address": address,
+                "lovelace": lovelace,
+                "ada": ada,
+                "native_tokens": len(tokens),
+                "tokens": tokens[:50],  # cap response size
+            }
+        except BlockfrostError as e:
+            return {"address": address, "error": str(e)}
+
+    async def _get_utxos(
+        self, address: str, asset: str | None = None
+    ) -> dict[str, Any]:
+        """Get UTXOs at an address."""
+        try:
+            utxos = await self._blockfrost.address_utxos(address, asset)
+            return {
+                "address": address,
+                "utxo_count": len(utxos),
+                "utxos": utxos,
+            }
+        except BlockfrostError as e:
+            return {"address": address, "error": str(e)}
+
+    async def _get_transaction(self, tx_hash: str) -> dict[str, Any]:
+        """Get transaction details."""
+        try:
+            tx_data = await self._blockfrost.tx(tx_hash)
+            if not tx_data:
+                return {"tx_hash": tx_hash, "found": False}
+            tx_utxos = await self._blockfrost.tx_utxos(tx_hash)
+            metadata = await self._blockfrost.tx_metadata(tx_hash)
+            return {
+                "tx_hash": tx_hash,
+                "found": True,
+                "tx": tx_data,
+                "utxos": tx_utxos,
+                "metadata": metadata,
+            }
+        except BlockfrostError as e:
+            return {"tx_hash": tx_hash, "error": str(e)}
+
+    async def _get_asset(self, asset_id: str) -> dict[str, Any]:
+        """Get asset/token information."""
+        try:
+            asset_data = await self._blockfrost.asset(asset_id)
+            if not asset_data:
+                return {"asset_id": asset_id, "found": False}
+            return {
+                "asset_id": asset_id,
+                "found": True,
+                **asset_data,
+            }
+        except BlockfrostError as e:
+            return {"asset_id": asset_id, "error": str(e)}
+
+    async def _submit_transaction(self, tx_cbor: bytes) -> dict[str, Any]:
+        """Submit a signed transaction to the Cardano network."""
+        try:
+            tx_hash = await self._blockfrost.tx_submit(tx_cbor)
+            self.log.info("cardano.tx_submitted", tx_hash=tx_hash)
+            return {"submitted": True, "tx_hash": tx_hash}
+        except BlockfrostError as e:
+            self.log.error("cardano.tx_submit_failed", error=str(e))
+            return {"submitted": False, "error": str(e)}
+
+    async def _get_chain_tip(self) -> dict[str, Any]:
+        """Get current chain tip."""
+        try:
+            return await self._blockfrost.tip()
+        except BlockfrostError as e:
+            return {"error": str(e)}
 
     def report(self) -> dict[str, Any]:
         base = super().report()
@@ -300,5 +477,12 @@ class CardanoChainAgent(AutonomousAgent):
             "protocol_facts": len(self._protocol_facts),
             "cross_chain_routes": list(self._cross_chain_routes.keys()),
             "facts_seeded": getattr(self, "_facts_seeded", False),
+            "blockfrost": self._blockfrost.stats(),
+            "chain_synced": self._chain_synced,
         })
         return base
+
+    async def stop(self) -> None:
+        """Shut down and close Blockfrost client."""
+        await self._blockfrost.close()
+        await super().stop()
