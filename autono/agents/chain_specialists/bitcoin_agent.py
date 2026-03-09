@@ -22,12 +22,19 @@ Coordinates with CardanoChainAgent via CharmsAgent for cross-chain transfers.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from autono.core.agent_base import AgentCapability, AutonomousAgent, Message
 
+from autono.agents.chain_specialists.compatibility_harness import (
+    CompatibilityTestMixin,
+    check_api_endpoint_exists,
+    check_config_key_exists,
+)
 
-class BitcoinChainAgent(AutonomousAgent):
+
+class BitcoinChainAgent(CompatibilityTestMixin, AutonomousAgent):
     """Bitcoin specialist — cheapest cross-chain path via Charms/BitcoinOS.
 
     When the cheapest route between chains goes through Bitcoin, this agent
@@ -139,6 +146,42 @@ class BitcoinChainAgent(AutonomousAgent):
             "bitcoin_to_night": "NightChainAgent",
         }
 
+        # UTXO format reference used for compatibility checks
+        self._utxo_format: dict[str, Any] = {
+            "txid": "hex_string_64",
+            "vout": "uint32",
+            "value": "satoshis_int",
+            "scriptPubKey": {"type": "string", "hex": "string"},
+        }
+
+        # Repos whose releases directly affect fee estimation and routing
+        self._fee_relevant_repos: set[str] = {
+            "bitcoin/bitcoin",
+            "romanz/electrs",
+            "nickkuk/electrs",  # alternate electrs fork
+            "blockstream/electrs",
+        }
+        self._charms_relevant_repos: set[str] = {
+            "charms-dev/charms",
+            "ArmadaChain/charms",
+            "ArmadaChain/bitcoin-os",
+        }
+
+        # In-memory log of upstream updates received from RepoWatcherAgent
+        self._upstream_updates: list[dict[str, Any]] = []
+
+        # Register compatibility checks for upstream repos
+        self.register_compatibility_check(
+            "bitcoin/bitcoin",
+            "bitcoin_rpc_endpoint",
+            check_api_endpoint_exists("http://127.0.0.1:8332"),
+        )
+        self.register_compatibility_check(
+            "bitcoin/bitcoin",
+            "utxo_format_compat",
+            check_config_key_exists(self._utxo_format, "scriptPubKey.type"),
+        )
+
     @property
     def work_interval(self) -> float:
         return 15.0
@@ -161,6 +204,26 @@ class BitcoinChainAgent(AutonomousAgent):
             self._research_requested = True
 
     async def handle_message(self, msg: Message) -> None:
+        # ---- Alerts from RepoWatcherAgent --------------------------------
+        if msg.kind == "alert":
+            alert_type = msg.payload.get("type", "")
+
+            if alert_type == "repo_new_release":
+                await self._handle_new_release(msg.payload)
+                return
+
+            if alert_type == "repo_breaking_change":
+                await self._handle_breaking_change(msg.payload)
+                return
+
+            if alert_type == "repo_beta_test_results":
+                await self.handle_beta_test_alert(msg)
+                return
+
+            if alert_type == "security_advisory":
+                await self._handle_security_advisory(msg.payload)
+                return
+
         if msg.kind == "request":
             req_type = msg.payload.get("type", "")
 
@@ -305,10 +368,235 @@ class BitcoinChainAgent(AutonomousAgent):
             return {"type": "P2PKH", "name": "Legacy", "bip": "BIP-44"}
         return {"type": "unknown", "name": "Unknown"}
 
+    # -- Repo-watcher alert handlers -----------------------------------------
+
+    async def _handle_new_release(self, payload: dict[str, Any]) -> None:
+        """Handle a ``repo_new_release`` alert from RepoWatcherAgent.
+
+        Tracks fee estimation API changes (bitcoin-core, electrs) and
+        assesses impact on cross-chain routing via Charms.
+        """
+        repo = payload.get("repo", "")
+        tag = payload.get("tag", "")
+        name = payload.get("name", tag)
+        prerelease = payload.get("prerelease", False)
+        body_preview = payload.get("body_preview", "")
+
+        self.log.info(
+            "bitcoin.new_release",
+            repo=repo,
+            tag=tag,
+            prerelease=prerelease,
+        )
+
+        # Assess fee estimation impact
+        affects_fees = repo in self._fee_relevant_repos
+        fee_keywords = [
+            "fee", "estimatesmartfee", "feerate", "mempool",
+            "rbf", "cpfp", "priority", "dust", "relay",
+        ]
+        body_lower = body_preview.lower()
+        fee_mentions = [kw for kw in fee_keywords if kw in body_lower]
+
+        # Assess Charms / cross-chain routing impact
+        affects_charms = repo in self._charms_relevant_repos
+        charms_keywords = [
+            "spell", "charm", "op_return", "taproot", "groth16",
+            "proof", "cbor", "bridge", "grail",
+        ]
+        charms_mentions = [kw for kw in charms_keywords if kw in body_lower]
+
+        impact = {
+            "repo": repo,
+            "tag": tag,
+            "name": name,
+            "prerelease": prerelease,
+            "affects_fee_estimation": affects_fees,
+            "fee_relevant_mentions": fee_mentions,
+            "affects_charms_routing": affects_charms,
+            "charms_relevant_mentions": charms_mentions,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        self._upstream_updates.append(impact)
+        self.memory.remember("tech_updates", {
+            "type": "upstream_release",
+            **impact,
+        })
+
+        # Store knowledge node for fee-affecting or charms-affecting releases
+        if (affects_fees or affects_charms) and self._store:
+            from autono.knowledge.types import KnowledgeNode, VolatilityTier
+
+            node = KnowledgeNode(
+                content=(
+                    f"Upstream release: {repo} {name} (tag {tag}). "
+                    f"Pre-release: {prerelease}. "
+                    f"Fee mentions: {', '.join(fee_mentions) or 'none'}. "
+                    f"Charms mentions: {', '.join(charms_mentions) or 'none'}. "
+                    f"Preview: {body_preview[:300]}"
+                ),
+                domain="bitcoin",
+                subdomain="upstream_updates",
+                volatility=VolatilityTier.VOLATILE,
+                tags=["release", "upstream", repo.split("/")[-1]],
+            )
+            self._store.save_node(node)
+
+        # If Charms-related, notify CharmsAgent so it can reassess routing
+        if affects_charms:
+            await self.send("CharmsAgent", "alert", {
+                "type": "upstream_charms_release",
+                "repo": repo,
+                "tag": tag,
+                "charms_mentions": charms_mentions,
+            })
+
+    async def _handle_breaking_change(self, payload: dict[str, Any]) -> None:
+        """Handle a ``repo_breaking_change`` alert from RepoWatcherAgent.
+
+        Assesses impact on fee estimation APIs and cross-chain routing.
+        """
+        repo = payload.get("repo", "")
+        issue = payload.get("issue", "")
+        title = payload.get("title", "")
+        url = payload.get("url", "")
+
+        self.log.warning(
+            "bitcoin.breaking_change",
+            repo=repo,
+            issue=issue,
+            title=title,
+        )
+
+        # Classify affected subsystems
+        affected_subsystems: list[str] = []
+        title_lower = title.lower()
+        if any(kw in title_lower for kw in ("fee", "estimatesmartfee", "feerate")):
+            affected_subsystems.append("fee_estimation")
+        if any(kw in title_lower for kw in ("rpc", "api", "endpoint", "json")):
+            affected_subsystems.append("rpc_api")
+        if any(kw in title_lower for kw in ("utxo", "input", "output", "psbt")):
+            affected_subsystems.append("utxo_psbt")
+        if any(kw in title_lower for kw in ("taproot", "schnorr", "witness")):
+            affected_subsystems.append("taproot_schnorr")
+        if any(kw in title_lower for kw in ("op_return", "spell", "charm")):
+            affected_subsystems.append("charms_integration")
+        if not affected_subsystems:
+            affected_subsystems.append("general")
+
+        update_record = {
+            "repo": repo,
+            "issue": issue,
+            "title": title,
+            "url": url,
+            "affected_subsystems": affected_subsystems,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        self._upstream_updates.append(update_record)
+        self.memory.remember("tech_updates", {
+            "type": "breaking_change",
+            **update_record,
+        })
+
+        # Create action-plan knowledge node
+        if self._store:
+            from autono.knowledge.types import KnowledgeNode, VolatilityTier
+
+            action_items = [
+                f"- Review breaking change: {title}",
+                f"- Affected subsystems: {', '.join(affected_subsystems)}",
+            ]
+            if "fee_estimation" in affected_subsystems:
+                action_items.append(
+                    "- Verify estimatesmartfee RPC still returns expected format"
+                )
+            if "rpc_api" in affected_subsystems:
+                action_items.append(
+                    "- Test Bitcoin RPC endpoint compatibility"
+                )
+            if "charms_integration" in affected_subsystems:
+                action_items.append(
+                    "- Coordinate with CharmsAgent on OP_RETURN / spell impact"
+                )
+            action_items.append(f"- Source: {url}")
+
+            node = KnowledgeNode(
+                content=(
+                    f"ACTION PLAN — Breaking change in {repo} (#{issue}):\n"
+                    f"{title}\n\n"
+                    + "\n".join(action_items)
+                ),
+                domain="bitcoin",
+                subdomain="action_plans",
+                volatility=VolatilityTier.VOLATILE,
+                priority_score=90,
+                tags=["breaking-change", "action-plan", repo.split("/")[-1]],
+            )
+            self._store.save_node(node)
+
+    async def _handle_security_advisory(self, payload: dict[str, Any]) -> None:
+        """Handle a ``security_advisory`` broadcast from RepoWatcherAgent.
+
+        Security advisories are critical.  Only act on Bitcoin-domain
+        advisories — log at warning, store immediately.
+        """
+        repo = payload.get("repo", "")
+        issue = payload.get("issue", "")
+        title = payload.get("title", "")
+        domain = payload.get("domain", "")
+        url = payload.get("url", "")
+
+        self.log.warning(
+            "bitcoin.security_advisory",
+            repo=repo,
+            issue=issue,
+            title=title,
+            domain=domain,
+        )
+
+        if domain and domain not in ("bitcoin", "bitcoinos", "charms"):
+            return
+
+        update_record = {
+            "repo": repo,
+            "issue": issue,
+            "title": title,
+            "url": url,
+            "severity": "critical",
+            "received_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        self._upstream_updates.append(update_record)
+        self.memory.remember("tech_updates", {
+            "type": "security_advisory",
+            **update_record,
+        })
+
+        if self._store:
+            from autono.knowledge.types import KnowledgeNode, VolatilityTier
+
+            node = KnowledgeNode(
+                content=(
+                    f"SECURITY ADVISORY — {repo} (#{issue}): {title}\n"
+                    f"URL: {url}\n"
+                    f"Priority: CRITICAL — assess impact on PSBT construction, "
+                    f"fee estimation, and Charms cross-chain routing."
+                ),
+                domain="bitcoin",
+                subdomain="security",
+                volatility=VolatilityTier.VOLATILE,
+                priority_score=99,
+                tags=["security", "advisory", repo.split("/")[-1]],
+            )
+            self._store.save_node(node)
+
     def report(self) -> dict[str, Any]:
         base = super().report()
         base.update({
             "protocol_facts": len(self._protocol_facts),
             "cross_chain_routes": list(self._cross_chain_routes.keys()),
+            "upstream_updates": len(self._upstream_updates),
         })
         return base

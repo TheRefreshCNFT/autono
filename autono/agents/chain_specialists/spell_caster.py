@@ -291,6 +291,9 @@ class SpellCasterAgent(AutonomousAgent):
         self._active_spells: dict[str, NormalizedSpell] = {}
         self._spell_history: list[dict[str, Any]] = []
 
+        # In-memory log of upstream updates that affect spell construction
+        self._upstream_updates: list[dict[str, Any]] = []
+
     @property
     def work_interval(self) -> float:
         return 10.0
@@ -311,6 +314,35 @@ class SpellCasterAgent(AutonomousAgent):
                 del self._active_spells[spell_id]
 
     async def handle_message(self, msg: Message) -> None:
+        # ---- Alerts from RepoWatcherAgent / CharmsAgent ------------------
+        if msg.kind == "alert":
+            alert_type = msg.payload.get("type", "")
+
+            if alert_type == "repo_new_release":
+                await self._handle_new_release(msg.payload)
+                return
+
+            if alert_type == "repo_breaking_change":
+                await self._handle_breaking_change(msg.payload)
+                return
+
+            if alert_type == "repo_beta_test_results":
+                await self._handle_beta_test_results(msg.payload)
+                return
+
+            if alert_type == "security_advisory":
+                await self._handle_security_advisory(msg.payload)
+                return
+
+            # Forwarded from CharmsAgent when proving pipeline changes
+            if alert_type == "proving_pipeline_update":
+                await self._handle_proving_pipeline_update(msg.payload)
+                return
+
+            if alert_type == "charms_breaking_change":
+                await self._handle_charms_breaking_change(msg.payload)
+                return
+
         if msg.kind != "request":
             return
 
@@ -540,6 +572,341 @@ class SpellCasterAgent(AutonomousAgent):
             spell.error = "timeout: no confirmation after 1 hour"
             self.log.warning("spell.timeout", spell_id=spell.id)
 
+    # -- Repo-watcher alert handlers -----------------------------------------
+
+    async def _handle_new_release(self, payload: dict[str, Any]) -> None:
+        """Handle a ``repo_new_release`` alert from RepoWatcherAgent.
+
+        Tracks Charms proving system changes and assesses impact on
+        spell construction and casting pipeline.
+        """
+        repo = payload.get("repo", "")
+        tag = payload.get("tag", "")
+        name = payload.get("name", tag)
+        prerelease = payload.get("prerelease", False)
+        body_preview = payload.get("body_preview", "")
+
+        self.log.info(
+            "spellcaster.new_release",
+            repo=repo,
+            tag=tag,
+            prerelease=prerelease,
+        )
+
+        body_lower = body_preview.lower()
+
+        # Track proving system changes
+        proving_keywords = [
+            "groth16", "proof", "prover", "verifier", "circuit",
+            "witness", "verification key", "snark", "zk",
+        ]
+        proving_mentions = [kw for kw in proving_keywords if kw in body_lower]
+
+        # Track spell format changes
+        spell_keywords = [
+            "spell", "cbor", "normalized", "op_return",
+            "app_public_inputs", "charm", "format",
+        ]
+        spell_mentions = [kw for kw in spell_keywords if kw in body_lower]
+
+        impact = {
+            "repo": repo,
+            "tag": tag,
+            "name": name,
+            "prerelease": prerelease,
+            "proving_mentions": proving_mentions,
+            "spell_format_mentions": spell_mentions,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        self._upstream_updates.append(impact)
+        self.memory.remember("tech_updates", {
+            "type": "upstream_release",
+            **impact,
+        })
+
+        # Store knowledge node for significant releases
+        if (proving_mentions or spell_mentions) and self._store:
+            from autono.knowledge.types import KnowledgeNode, VolatilityTier
+
+            node = KnowledgeNode(
+                content=(
+                    f"Upstream release: {repo} {name} (tag {tag}). "
+                    f"Pre-release: {prerelease}. "
+                    f"Proving changes: {', '.join(proving_mentions) or 'none'}. "
+                    f"Spell format changes: {', '.join(spell_mentions) or 'none'}. "
+                    f"Preview: {body_preview[:300]}"
+                ),
+                domain="charms",
+                subdomain="spell_updates",
+                volatility=VolatilityTier.VOLATILE,
+                tags=["release", "upstream", "spell-caster", repo.split("/")[-1]],
+            )
+            self._store.save_node(node)
+
+    async def _handle_breaking_change(self, payload: dict[str, Any]) -> None:
+        """Handle a ``repo_breaking_change`` alert from RepoWatcherAgent.
+
+        Assesses impact on spell construction, proof generation, and
+        the casting pipeline.
+        """
+        repo = payload.get("repo", "")
+        issue = payload.get("issue", "")
+        title = payload.get("title", "")
+        url = payload.get("url", "")
+
+        self.log.warning(
+            "spellcaster.breaking_change",
+            repo=repo,
+            issue=issue,
+            title=title,
+        )
+
+        # Classify affected subsystems
+        affected_subsystems: list[str] = []
+        title_lower = title.lower()
+        if any(kw in title_lower for kw in ("spell", "cbor", "format", "normalized")):
+            affected_subsystems.append("spell_construction")
+        if any(kw in title_lower for kw in ("proof", "groth16", "circuit", "witness")):
+            affected_subsystems.append("proof_generation")
+        if any(kw in title_lower for kw in ("op_return", "cast", "submit", "tx")):
+            affected_subsystems.append("casting_pipeline")
+        if any(kw in title_lower for kw in ("bridge", "cross-chain", "materialize")):
+            affected_subsystems.append("cross_chain_landing")
+        if not affected_subsystems:
+            affected_subsystems.append("general")
+
+        update_record = {
+            "repo": repo,
+            "issue": issue,
+            "title": title,
+            "url": url,
+            "affected_subsystems": affected_subsystems,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        self._upstream_updates.append(update_record)
+        self.memory.remember("tech_updates", {
+            "type": "breaking_change",
+            **update_record,
+        })
+
+        # Create action-plan knowledge node
+        if self._store:
+            from autono.knowledge.types import KnowledgeNode, VolatilityTier
+
+            action_items = [
+                f"- Review breaking change: {title}",
+                f"- Affected subsystems: {', '.join(affected_subsystems)}",
+            ]
+            if "spell_construction" in affected_subsystems:
+                action_items.append(
+                    "- Verify NormalizedSpell structure and CBOR encoding"
+                )
+                action_items.append(
+                    "- Update SPELL_TEMPLATES if format changed"
+                )
+            if "proof_generation" in affected_subsystems:
+                action_items.append(
+                    "- Verify Groth16 proof pipeline still produces valid proofs"
+                )
+            if "casting_pipeline" in affected_subsystems:
+                action_items.append(
+                    "- Test OP_RETURN embedding and tx submission via BitcoinChainAgent"
+                )
+            if "cross_chain_landing" in affected_subsystems:
+                action_items.append(
+                    "- Coordinate with chain agents to verify materialization"
+                )
+            action_items.append(f"- Source: {url}")
+
+            node = KnowledgeNode(
+                content=(
+                    f"ACTION PLAN — Breaking change in {repo} (#{issue}):\n"
+                    f"{title}\n\n"
+                    + "\n".join(action_items)
+                ),
+                domain="charms",
+                subdomain="spell_action_plans",
+                volatility=VolatilityTier.VOLATILE,
+                priority_score=90,
+                tags=["breaking-change", "action-plan", "spell-caster",
+                      repo.split("/")[-1]],
+            )
+            self._store.save_node(node)
+
+    async def _handle_beta_test_results(self, payload: dict[str, Any]) -> None:
+        """Handle ``repo_beta_test_results`` — log and store for reference."""
+        repo = payload.get("repo", "")
+        tag = payload.get("tag", "")
+        compatibility = payload.get("compatibility", "unknown")
+        breaking_changes = payload.get("breaking_changes", [])
+
+        self.log.info(
+            "spellcaster.beta_test_results",
+            repo=repo,
+            tag=tag,
+            compatibility=compatibility,
+            breaking_count=len(breaking_changes),
+        )
+
+        update_record = {
+            "repo": repo,
+            "tag": tag,
+            "compatibility": compatibility,
+            "breaking_changes": breaking_changes,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        self._upstream_updates.append(update_record)
+        self.memory.remember("tech_updates", {
+            "type": "beta_test_results",
+            **update_record,
+        })
+
+    async def _handle_security_advisory(self, payload: dict[str, Any]) -> None:
+        """Handle a ``security_advisory`` broadcast from RepoWatcherAgent.
+
+        Only act on advisories relevant to the charms / bitcoin domains.
+        """
+        repo = payload.get("repo", "")
+        issue = payload.get("issue", "")
+        title = payload.get("title", "")
+        domain = payload.get("domain", "")
+        url = payload.get("url", "")
+
+        self.log.warning(
+            "spellcaster.security_advisory",
+            repo=repo,
+            issue=issue,
+            title=title,
+            domain=domain,
+        )
+
+        if domain and domain not in ("charms", "bitcoinos", "bitcoin"):
+            return
+
+        update_record = {
+            "repo": repo,
+            "issue": issue,
+            "title": title,
+            "url": url,
+            "severity": "critical",
+            "received_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        self._upstream_updates.append(update_record)
+        self.memory.remember("tech_updates", {
+            "type": "security_advisory",
+            **update_record,
+        })
+
+        if self._store:
+            from autono.knowledge.types import KnowledgeNode, VolatilityTier
+
+            node = KnowledgeNode(
+                content=(
+                    f"SECURITY ADVISORY — {repo} (#{issue}): {title}\n"
+                    f"URL: {url}\n"
+                    f"Priority: CRITICAL — assess impact on spell construction, "
+                    f"Groth16 proof generation, and cross-chain casting pipeline."
+                ),
+                domain="charms",
+                subdomain="security",
+                volatility=VolatilityTier.VOLATILE,
+                priority_score=99,
+                tags=["security", "advisory", "spell-caster",
+                      repo.split("/")[-1]],
+            )
+            self._store.save_node(node)
+
+    async def _handle_proving_pipeline_update(
+        self, payload: dict[str, Any]
+    ) -> None:
+        """Handle a ``proving_pipeline_update`` forwarded from CharmsAgent.
+
+        When CharmsAgent detects a release that affects the Groth16
+        proving system, it notifies SpellCasterAgent so active spells
+        can be assessed.
+        """
+        repo = payload.get("repo", "")
+        tag = payload.get("tag", "")
+        proving_mentions = payload.get("proving_mentions", [])
+
+        self.log.info(
+            "spellcaster.proving_pipeline_update",
+            repo=repo,
+            tag=tag,
+            mentions=proving_mentions,
+        )
+
+        update_record = {
+            "repo": repo,
+            "tag": tag,
+            "proving_mentions": proving_mentions,
+            "source": "CharmsAgent",
+            "received_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        self._upstream_updates.append(update_record)
+        self.memory.remember("tech_updates", {
+            "type": "proving_pipeline_update",
+            **update_record,
+        })
+
+        # Flag any active DRAFT spells for re-verification
+        flagged = 0
+        for spell in self._active_spells.values():
+            if spell.status == SpellStatus.DRAFT:
+                spell.error = (
+                    f"Proving pipeline update detected ({repo} {tag}). "
+                    f"Re-verify proof compatibility before casting."
+                )
+                flagged += 1
+
+        if flagged:
+            self.log.warning(
+                "spellcaster.draft_spells_flagged",
+                count=flagged,
+                reason="proving_pipeline_update",
+            )
+
+    async def _handle_charms_breaking_change(
+        self, payload: dict[str, Any]
+    ) -> None:
+        """Handle a ``charms_breaking_change`` forwarded from CharmsAgent.
+
+        When CharmsAgent detects a breaking change that affects the
+        spell format or proving pipeline, it alerts SpellCasterAgent.
+        """
+        repo = payload.get("repo", "")
+        issue = payload.get("issue", "")
+        title = payload.get("title", "")
+        affected = payload.get("affected_subsystems", [])
+
+        self.log.warning(
+            "spellcaster.charms_breaking_change",
+            repo=repo,
+            issue=issue,
+            title=title,
+            affected=affected,
+        )
+
+        update_record = {
+            "repo": repo,
+            "issue": issue,
+            "title": title,
+            "affected_subsystems": affected,
+            "source": "CharmsAgent",
+            "received_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        self._upstream_updates.append(update_record)
+        self.memory.remember("tech_updates", {
+            "type": "charms_breaking_change",
+            **update_record,
+        })
+
     def report(self) -> dict[str, Any]:
         base = super().report()
         active = {
@@ -552,5 +919,6 @@ class SpellCasterAgent(AutonomousAgent):
             "active_count": len(self._active_spells),
             "history_count": len(self._spell_history),
             "templates": list(SPELL_TEMPLATES.keys()),
+            "upstream_updates": len(self._upstream_updates),
         })
         return base

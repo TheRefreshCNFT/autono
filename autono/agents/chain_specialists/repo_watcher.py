@@ -496,6 +496,9 @@ class RepoWatcherAgent(AutonomousAgent):
         if check_all or WatchScope.ISSUES in scopes or WatchScope.SECURITY in scopes:
             await self._check_issues(repo)
 
+        if check_all or WatchScope.PULL_REQUESTS in scopes:
+            await self._check_pull_requests(repo)
+
         # Update last_checked timestamp
         state = self._watch_state.setdefault(repo.full_name, {})
         state["last_checked"] = datetime.now(timezone.utc).isoformat()
@@ -727,6 +730,185 @@ class RepoWatcherAgent(AutonomousAgent):
             seen_issues.append(issue_id)
 
         state["seen_issues"] = seen_issues[-100:]  # cap stored list
+
+    async def _check_pull_requests(self, repo: WatchedRepo) -> None:
+        """Check for open PRs with breaking/critical labels or targeting tracked branch."""
+        url = (
+            f"{repo.api_url}/pulls"
+            f"?state=open&sort=updated&direction=desc&per_page=10"
+        )
+        data = await self._github_get(url)
+        if data is None or not isinstance(data, list):
+            return
+
+        critical_labels = {"breaking-change", "breaking", "security", "critical"}
+
+        state = self._watch_state.setdefault(repo.full_name, {})
+        seen_prs: list[str] = state.get("seen_prs", [])
+        tracked_prs: dict[str, str] = state.get("tracked_prs", {})
+        # tracked_prs maps PR number (str) -> last known state ("open" or "merged")
+
+        for pr in data:
+            pr_number = str(pr.get("number", ""))
+            if not pr_number:
+                continue
+
+            pr_labels = {
+                lbl.get("name", "").lower()
+                for lbl in pr.get("labels", [])
+            }
+            base_branch = pr.get("base", {}).get("ref", "")
+            title = pr.get("title", "")
+            body = (pr.get("body", "") or "")[:800]
+            html_url = pr.get("html_url", "")
+            is_merged = pr.get("merged_at") is not None
+
+            # Filter: only care about PRs with critical labels OR targeting tracked branch
+            has_critical_label = bool(pr_labels & critical_labels)
+            targets_tracked_branch = base_branch == repo.branch
+
+            if not has_critical_label and not targets_tracked_branch:
+                continue
+
+            # Handle new PRs we haven't seen before
+            if pr_number not in seen_prs:
+                if has_critical_label:
+                    is_security = "security" in pr_labels
+                    is_breaking = bool(pr_labels & {"breaking-change", "breaking"})
+
+                    tags = ["pull_request", repo.domain]
+                    if is_security:
+                        tags.append("security")
+                    if is_breaking:
+                        tags.append("breaking-change")
+                    if "critical" in pr_labels:
+                        tags.append("critical")
+
+                    update_type = "security" if is_security else "breaking_change"
+
+                    await self._create_update_node(
+                        repo=repo,
+                        update_type=update_type,
+                        title=(
+                            f"Critical PR: {repo.full_name} #{pr_number} — {title}"
+                        ),
+                        content=(
+                            f"{'Security' if is_security else 'Breaking/critical'} "
+                            f"pull request in {repo.full_name}:\n\n"
+                            f"PR #{pr_number}: {title}\n"
+                            f"Target branch: {base_branch}\n"
+                            f"Labels: {', '.join(sorted(pr_labels))}\n"
+                            f"URL: {html_url}\n\n"
+                            f"{body}"
+                        ),
+                        tags=tags,
+                    )
+
+                    await self._notify_chain_agent(
+                        repo=repo,
+                        update_type="critical_pr",
+                        details={
+                            "repo": repo.full_name,
+                            "pr": pr_number,
+                            "title": title,
+                            "url": html_url,
+                            "labels": sorted(pr_labels),
+                            "base_branch": base_branch,
+                            "is_security": is_security,
+                            "is_breaking": is_breaking,
+                        },
+                        priority=3 if is_security else 2,
+                    )
+
+                    # ENGAGE: Comment on breaking/critical PRs with impact assessment
+                    specialist = _DOMAIN_AGENT_MAP.get(repo.domain, "unknown")
+                    await self._comment_on_issue(
+                        repo, pr_number,
+                        f"**Pull request impact assessment:**\n\n"
+                        f"This {'security-related ' if is_security else ''}"
+                        f"{'breaking ' if is_breaking else 'critical '}"
+                        f"PR affects the `{repo.domain}` domain in our "
+                        f"multi-chain agent system.\n\n"
+                        f"Affected component: `{specialist}` chain specialist\n\n"
+                        f"We are tracking this PR and will evaluate the impact "
+                        f"on our integrations when it is merged.",
+                    )
+
+                    # Track this PR for merge monitoring
+                    tracked_prs[pr_number] = "open"
+
+                seen_prs.append(pr_number)
+
+                self.log.info("repo_watcher.new_critical_pr",
+                              repo=repo.full_name, pr=pr_number,
+                              title=title, labels=sorted(pr_labels))
+
+        # Check merge status of previously tracked breaking PRs
+        merged_to_remove: list[str] = []
+        for tracked_pr_number, tracked_status in tracked_prs.items():
+            if tracked_status == "merged":
+                continue
+
+            # Fetch current PR state
+            pr_url = f"{repo.api_url}/pulls/{tracked_pr_number}"
+            pr_data = await self._github_get(pr_url)
+            if pr_data is None or not isinstance(pr_data, dict):
+                continue
+
+            if pr_data.get("merged_at") is not None and tracked_status == "open":
+                pr_title = pr_data.get("title", "")
+                pr_html_url = pr_data.get("html_url", "")
+                merge_sha = pr_data.get("merge_commit_sha", "")[:8]
+
+                # High-priority alert: breaking PR merged
+                await self._create_update_node(
+                    repo=repo,
+                    update_type="breaking_change",
+                    title=(
+                        f"MERGED — Breaking PR: {repo.full_name} "
+                        f"#{tracked_pr_number} — {pr_title}"
+                    ),
+                    content=(
+                        f"A previously-tracked breaking/critical PR has been MERGED "
+                        f"in {repo.full_name}.\n\n"
+                        f"PR #{tracked_pr_number}: {pr_title}\n"
+                        f"Merge commit: {merge_sha}\n"
+                        f"URL: {pr_html_url}\n\n"
+                        f"ACTION REQUIRED: Evaluate impact and begin migration "
+                        f"planning if necessary."
+                    ),
+                    tags=["pull_request", "merged", "breaking-change", repo.domain],
+                )
+
+                await self._notify_chain_agent(
+                    repo=repo,
+                    update_type="critical_pr",
+                    details={
+                        "repo": repo.full_name,
+                        "pr": tracked_pr_number,
+                        "title": pr_title,
+                        "url": pr_html_url,
+                        "merge_commit": merge_sha,
+                        "event": "merged",
+                    },
+                    priority=3,
+                )
+
+                tracked_prs[tracked_pr_number] = "merged"
+
+                self.log.warning("repo_watcher.breaking_pr_merged",
+                                 repo=repo.full_name, pr=tracked_pr_number,
+                                 title=pr_title)
+
+            # If the PR was closed without merging, stop tracking
+            elif pr_data.get("state") == "closed" and pr_data.get("merged_at") is None:
+                merged_to_remove.append(tracked_pr_number)
+
+        for pr_num in merged_to_remove:
+            tracked_prs.pop(pr_num, None)
+
+        state["seen_prs"] = seen_prs[-100:]  # cap stored list
+        state["tracked_prs"] = tracked_prs
 
     # -- knowledge graph integration ------------------------------------------
 

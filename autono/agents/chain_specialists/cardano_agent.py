@@ -30,13 +30,21 @@ Uses Links & Locks for instant protocol fact lookups.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from autono.core.agent_base import AgentCapability, AutonomousAgent, Message
 from autono.services.blockfrost import BlockfrostClient, BlockfrostError
 
+from autono.agents.chain_specialists.compatibility_harness import (
+    CompatibilityTestMixin,
+    check_api_endpoint_exists,
+    check_config_key_exists,
+    check_dependency_version,
+)
 
-class CardanoChainAgent(AutonomousAgent):
+
+class CardanoChainAgent(CompatibilityTestMixin, AutonomousAgent):
     """Cardano blockchain specialist — cost optimization is job #1.
 
     Every transaction this agent builds must be cheaper than what Vespr,
@@ -138,6 +146,56 @@ class CardanoChainAgent(AutonomousAgent):
             },
         ]
 
+        # Cardano node config — used for compatibility checks
+        self._cardano_node_config: dict[str, Any] = {
+            "protocol": {
+                "plutus": {
+                    "costModel": {
+                        "PlutusV1": {},
+                        "PlutusV2": {},
+                        "PlutusV3": {},
+                    },
+                },
+                "minFeeA": 44,
+                "minFeeB": 155381,
+            },
+        }
+
+        # Register compatibility checks for upstream repos
+        self.register_compatibility_check(
+            "blockfrost/*",
+            "blockfrost_api_health",
+            check_api_endpoint_exists("https://cardano-mainnet.blockfrost.io/api/v0/health"),
+        )
+        self.register_compatibility_check(
+            "IntersectMBO/cardano-node",
+            "cardano_node_config_compat",
+            check_config_key_exists(
+                self._cardano_node_config,
+                "protocol.minFeeA",
+            ),
+        )
+        self.register_compatibility_check(
+            "IntersectMBO/cardano-node",
+            "plutus_cost_model_key",
+            check_config_key_exists(
+                self._cardano_node_config,
+                "protocol.plutus.costModel.PlutusV3",
+            ),
+        )
+
+        # Repos whose releases directly affect cost optimization
+        self._cost_relevant_repos: set[str] = {
+            "IntersectMBO/cardano-node",
+            "IntersectMBO/cardano-cli",
+            "aiken-lang/aiken",
+            "blockfrost/blockfrost-backend-ryo",
+            "cardano-foundation/cardano-wallet",
+        }
+
+        # In-memory log of upstream updates received from RepoWatcherAgent
+        self._upstream_updates: list[dict[str, Any]] = []
+
         # Cross-chain routing awareness
         self._cross_chain_routes: dict[str, str] = {
             "cardano_to_bitcoin": "CharmsAgent",
@@ -173,6 +231,26 @@ class CardanoChainAgent(AutonomousAgent):
             await self._sync_chain_state()
 
     async def handle_message(self, msg: Message) -> None:
+        # ---- Alerts from RepoWatcherAgent --------------------------------
+        if msg.kind == "alert":
+            alert_type = msg.payload.get("type", "")
+
+            if alert_type == "repo_new_release":
+                await self._handle_new_release(msg.payload)
+                return
+
+            if alert_type == "repo_breaking_change":
+                await self._handle_breaking_change(msg.payload)
+                return
+
+            if alert_type == "repo_beta_test_results":
+                await self.handle_beta_test_alert(msg)
+                return
+
+            if alert_type == "security_advisory":
+                await self._handle_security_advisory(msg.payload)
+                return
+
         if msg.kind == "request":
             req_type = msg.payload.get("type", "")
 
@@ -590,6 +668,214 @@ class CardanoChainAgent(AutonomousAgent):
         except BlockfrostError as e:
             return {"error": str(e)}
 
+    # -- Repo-watcher alert handlers -----------------------------------------
+
+    async def _handle_new_release(self, payload: dict[str, Any]) -> None:
+        """Handle a ``repo_new_release`` alert from RepoWatcherAgent.
+
+        Logs the update, assesses cost-optimization impact, stores the
+        update in memory, and — if the release comes from a cost-relevant
+        repo — creates a knowledge node for future reference.
+        """
+        repo = payload.get("repo", "")
+        tag = payload.get("tag", "")
+        name = payload.get("name", tag)
+        prerelease = payload.get("prerelease", False)
+        body_preview = payload.get("body_preview", "")
+
+        self.log.info(
+            "cardano.new_release",
+            repo=repo,
+            tag=tag,
+            prerelease=prerelease,
+        )
+
+        # Assess cost-optimization impact
+        affects_cost = repo in self._cost_relevant_repos
+        cost_keywords = [
+            "fee", "min_fee", "cost", "utxo", "collateral",
+            "protocol param", "plutus cost", "script size",
+            "reference script", "min-utxo",
+        ]
+        body_lower = body_preview.lower()
+        cost_mentions = [kw for kw in cost_keywords if kw in body_lower]
+
+        impact = {
+            "repo": repo,
+            "tag": tag,
+            "name": name,
+            "prerelease": prerelease,
+            "affects_cost_optimization": affects_cost,
+            "cost_relevant_mentions": cost_mentions,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        # Store in memory for future reference
+        self._upstream_updates.append(impact)
+        self.memory.remember("tech_updates", {
+            "type": "upstream_release",
+            **impact,
+        })
+
+        # If from a cost-relevant repo, create a knowledge node
+        if affects_cost and self._store:
+            from autono.knowledge.types import KnowledgeNode, VolatilityTier
+
+            node = KnowledgeNode(
+                content=(
+                    f"Upstream release: {repo} {name} (tag {tag}). "
+                    f"Pre-release: {prerelease}. "
+                    f"Cost-relevant mentions: {', '.join(cost_mentions) or 'none'}. "
+                    f"Preview: {body_preview[:300]}"
+                ),
+                domain="cardano",
+                subdomain="upstream_updates",
+                volatility=VolatilityTier.VOLATILE,
+                tags=["release", "upstream", repo.split("/")[-1]],
+            )
+            self._store.save_node(node)
+
+    async def _handle_breaking_change(self, payload: dict[str, Any]) -> None:
+        """Handle a ``repo_breaking_change`` alert from RepoWatcherAgent.
+
+        Logs the issue, assesses impact on cost optimization features,
+        stores the update, and creates an action plan in a knowledge node.
+        """
+        repo = payload.get("repo", "")
+        issue = payload.get("issue", "")
+        title = payload.get("title", "")
+        url = payload.get("url", "")
+
+        self.log.warning(
+            "cardano.breaking_change",
+            repo=repo,
+            issue=issue,
+            title=title,
+        )
+
+        affects_cost = repo in self._cost_relevant_repos
+
+        # Determine which subsystems may be affected
+        affected_subsystems: list[str] = []
+        title_lower = title.lower()
+        if any(kw in title_lower for kw in ("fee", "cost", "min_fee", "protocol")):
+            affected_subsystems.append("fee_calculation")
+        if any(kw in title_lower for kw in ("utxo", "input", "output")):
+            affected_subsystems.append("utxo_selection")
+        if any(kw in title_lower for kw in ("plutus", "script", "contract")):
+            affected_subsystems.append("smart_contracts")
+        if any(kw in title_lower for kw in ("api", "endpoint", "query")):
+            affected_subsystems.append("chain_queries")
+        if not affected_subsystems:
+            affected_subsystems.append("general")
+
+        update_record = {
+            "repo": repo,
+            "issue": issue,
+            "title": title,
+            "url": url,
+            "affects_cost_optimization": affects_cost,
+            "affected_subsystems": affected_subsystems,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        self._upstream_updates.append(update_record)
+        self.memory.remember("tech_updates", {
+            "type": "breaking_change",
+            **update_record,
+        })
+
+        # Create an action-plan knowledge node
+        if self._store:
+            from autono.knowledge.types import KnowledgeNode, VolatilityTier
+
+            action_items = [
+                f"- Review breaking change: {title}",
+                f"- Affected subsystems: {', '.join(affected_subsystems)}",
+                f"- Check if fee calculation logic needs updating"
+                if "fee_calculation" in affected_subsystems else "",
+                f"- Verify UTXO selection still produces optimal results"
+                if "utxo_selection" in affected_subsystems else "",
+                f"- Test Plutus V3 compatibility"
+                if "smart_contracts" in affected_subsystems else "",
+                f"- Validate Blockfrost/Koios API integration"
+                if "chain_queries" in affected_subsystems else "",
+                f"- Source: {url}",
+            ]
+            node = KnowledgeNode(
+                content=(
+                    f"ACTION PLAN — Breaking change in {repo} (#{issue}):\n"
+                    f"{title}\n\n"
+                    + "\n".join(item for item in action_items if item)
+                ),
+                domain="cardano",
+                subdomain="action_plans",
+                volatility=VolatilityTier.VOLATILE,
+                priority_score=90,
+                tags=["breaking-change", "action-plan", repo.split("/")[-1]],
+            )
+            self._store.save_node(node)
+
+    async def _handle_security_advisory(self, payload: dict[str, Any]) -> None:
+        """Handle a ``security_advisory`` broadcast from RepoWatcherAgent.
+
+        Security advisories are critical — log at warning level, store
+        immediately, and notify the cross-chain orchestrator if the
+        advisory affects a cost-relevant repo.
+        """
+        repo = payload.get("repo", "")
+        issue = payload.get("issue", "")
+        title = payload.get("title", "")
+        domain = payload.get("domain", "")
+        url = payload.get("url", "")
+
+        self.log.warning(
+            "cardano.security_advisory",
+            repo=repo,
+            issue=issue,
+            title=title,
+            domain=domain,
+        )
+
+        # Only act on advisories relevant to Cardano domain
+        if domain and domain != "cardano":
+            return
+
+        update_record = {
+            "repo": repo,
+            "issue": issue,
+            "title": title,
+            "url": url,
+            "severity": "critical",
+            "received_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        self._upstream_updates.append(update_record)
+        self.memory.remember("tech_updates", {
+            "type": "security_advisory",
+            **update_record,
+        })
+
+        # Create high-priority knowledge node
+        if self._store:
+            from autono.knowledge.types import KnowledgeNode, VolatilityTier
+
+            node = KnowledgeNode(
+                content=(
+                    f"SECURITY ADVISORY — {repo} (#{issue}): {title}\n"
+                    f"URL: {url}\n"
+                    f"Priority: CRITICAL — assess for impact on "
+                    f"transaction building, UTXO selection, and "
+                    f"Blockfrost API integration."
+                ),
+                domain="cardano",
+                subdomain="security",
+                volatility=VolatilityTier.VOLATILE,
+                priority_score=99,
+                tags=["security", "advisory", repo.split("/")[-1]],
+            )
+            self._store.save_node(node)
+
     def report(self) -> dict[str, Any]:
         base = super().report()
         base.update({
@@ -598,6 +884,7 @@ class CardanoChainAgent(AutonomousAgent):
             "facts_seeded": getattr(self, "_facts_seeded", False),
             "blockfrost": self._blockfrost.stats(),
             "chain_synced": self._chain_synced,
+            "upstream_updates": len(self._upstream_updates),
         })
         return base
 

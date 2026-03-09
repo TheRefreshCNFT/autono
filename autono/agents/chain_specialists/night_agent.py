@@ -23,12 +23,19 @@ Also handles:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from autono.core.agent_base import AgentCapability, AutonomousAgent, Message
 
+from autono.agents.chain_specialists.compatibility_harness import (
+    CompatibilityTestMixin,
+    check_dependency_version,
+    check_config_key_exists,
+)
 
-class NightChainAgent(AutonomousAgent):
+
+class NightChainAgent(CompatibilityTestMixin, AutonomousAgent):
     """Night Chain — invisible security so users never worry about keys.
 
     Handles all encryption, backup, and recovery behind the scenes. Users
@@ -92,6 +99,46 @@ class NightChainAgent(AutonomousAgent):
             },
         ]
 
+        # Encryption config — used for compatibility checks
+        self._encryption_config: dict[str, Any] = {
+            "algorithm": "AES-256-GCM",
+            "kdf": "PBKDF2-SHA256",
+            "kdf_iterations": 100_000,
+            "recovery": {
+                "dialog_lines": 4,
+                "words_per_line": 4,
+            },
+        }
+
+        # Register compatibility checks for upstream repos
+        self.register_compatibility_check(
+            "nicolo-ribaudo/noble-ed25519",
+            "encryption_lib_compat",
+            check_dependency_version("cryptography", "41.0.0"),
+        )
+        self.register_compatibility_check(
+            "nicolo-ribaudo/noble-ed25519",
+            "recovery_protocol_config",
+            check_config_key_exists(
+                self._encryption_config,
+                "recovery.dialog_lines",
+            ),
+        )
+
+        # Repos whose releases affect encryption, privacy, or recovery
+        self._privacy_relevant_repos: set[str] = {
+            "nicolo-ribaudo/noble-ed25519",
+            "midnight-network/midnight-core",
+            "input-output-hk/midnight-sdk",
+        }
+        self._encryption_relevant_repos: set[str] = {
+            "nicolo-ribaudo/noble-ed25519",
+            "nicolo-ribaudo/noble-secp256k1",
+        }
+
+        # In-memory log of upstream updates received from RepoWatcherAgent
+        self._upstream_updates: list[dict[str, Any]] = []
+
         # Knowledge graph backup state
         self._last_backup_hash: str = ""
         self._backup_count: int = 0
@@ -128,6 +175,26 @@ class NightChainAgent(AutonomousAgent):
         # Periodic backups are triggered on-demand via message (requires access key)
 
     async def handle_message(self, msg: Message) -> None:
+        # ---- Alerts from RepoWatcherAgent --------------------------------
+        if msg.kind == "alert":
+            alert_type = msg.payload.get("type", "")
+
+            if alert_type == "repo_new_release":
+                await self._handle_new_release(msg.payload)
+                return
+
+            if alert_type == "repo_breaking_change":
+                await self._handle_breaking_change(msg.payload)
+                return
+
+            if alert_type == "repo_beta_test_results":
+                await self.handle_beta_test_alert(msg)
+                return
+
+            if alert_type == "security_advisory":
+                await self._handle_security_advisory(msg.payload)
+                return
+
         if msg.kind == "request":
             req_type = msg.payload.get("type", "")
 
@@ -304,6 +371,245 @@ class NightChainAgent(AutonomousAgent):
             "prompt": "Please provide 4 words from your recovery phrase.",
         }
 
+    # -- Repo-watcher alert handlers -----------------------------------------
+
+    async def _handle_new_release(self, payload: dict[str, Any]) -> None:
+        """Handle a ``repo_new_release`` alert from RepoWatcherAgent.
+
+        Tracks encryption library changes, assesses backup/recovery
+        protocol impact, and monitors for privacy-breaking changes.
+        """
+        repo = payload.get("repo", "")
+        tag = payload.get("tag", "")
+        name = payload.get("name", tag)
+        prerelease = payload.get("prerelease", False)
+        body_preview = payload.get("body_preview", "")
+
+        self.log.info(
+            "night.new_release",
+            repo=repo,
+            tag=tag,
+            prerelease=prerelease,
+        )
+
+        body_lower = body_preview.lower()
+
+        # Track encryption library changes
+        encryption_keywords = [
+            "aes", "gcm", "pbkdf2", "ed25519", "encryption",
+            "cipher", "key derivation", "salt", "iv", "nonce",
+        ]
+        encryption_mentions = [kw for kw in encryption_keywords if kw in body_lower]
+
+        # Assess backup/recovery protocol impact
+        recovery_keywords = [
+            "backup", "recovery", "restore", "seed", "mnemonic",
+            "key export", "import", "migration",
+        ]
+        recovery_mentions = [kw for kw in recovery_keywords if kw in body_lower]
+
+        # Monitor for privacy-breaking changes
+        privacy_keywords = [
+            "privacy", "leak", "expose", "plaintext", "unencrypted",
+            "vulnerability", "side-channel", "timing attack",
+            "deprecated", "removed", "breaking",
+        ]
+        privacy_mentions = [kw for kw in privacy_keywords if kw in body_lower]
+
+        impact = {
+            "repo": repo,
+            "tag": tag,
+            "name": name,
+            "prerelease": prerelease,
+            "encryption_mentions": encryption_mentions,
+            "recovery_mentions": recovery_mentions,
+            "privacy_concerns": privacy_mentions,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        self._upstream_updates.append(impact)
+        self.memory.remember("tech_updates", {
+            "type": "upstream_release",
+            **impact,
+        })
+
+        # Store knowledge node for significant releases
+        if (encryption_mentions or recovery_mentions or privacy_mentions) and self._store:
+            from autono.knowledge.types import KnowledgeNode, VolatilityTier
+
+            node = KnowledgeNode(
+                content=(
+                    f"Upstream release: {repo} {name} (tag {tag}). "
+                    f"Pre-release: {prerelease}. "
+                    f"Encryption changes: {', '.join(encryption_mentions) or 'none'}. "
+                    f"Recovery impact: {', '.join(recovery_mentions) or 'none'}. "
+                    f"Privacy concerns: {', '.join(privacy_mentions) or 'none'}. "
+                    f"Preview: {body_preview[:300]}"
+                ),
+                domain="night_chain",
+                subdomain="upstream_updates",
+                volatility=VolatilityTier.VOLATILE,
+                tags=["release", "upstream", repo.split("/")[-1]],
+            )
+            self._store.save_node(node)
+
+    async def _handle_breaking_change(self, payload: dict[str, Any]) -> None:
+        """Handle a ``repo_breaking_change`` alert from RepoWatcherAgent.
+
+        Assesses impact on encryption libraries, backup/recovery
+        protocols, and watches for privacy-breaking changes.
+        """
+        repo = payload.get("repo", "")
+        issue = payload.get("issue", "")
+        title = payload.get("title", "")
+        url = payload.get("url", "")
+
+        self.log.warning(
+            "night.breaking_change",
+            repo=repo,
+            issue=issue,
+            title=title,
+        )
+
+        # Classify affected subsystems
+        affected_subsystems: list[str] = []
+        title_lower = title.lower()
+        if any(kw in title_lower for kw in ("aes", "gcm", "encryption", "cipher", "ed25519")):
+            affected_subsystems.append("encryption")
+        if any(kw in title_lower for kw in ("backup", "recovery", "restore", "seed")):
+            affected_subsystems.append("backup_recovery")
+        if any(kw in title_lower for kw in ("privacy", "leak", "expose", "plaintext")):
+            affected_subsystems.append("privacy")
+        if any(kw in title_lower for kw in ("key", "keypair", "derivation", "pbkdf2")):
+            affected_subsystems.append("key_management")
+        if any(kw in title_lower for kw in ("api", "sdk", "endpoint")):
+            affected_subsystems.append("sdk_api")
+        if not affected_subsystems:
+            affected_subsystems.append("general")
+
+        update_record = {
+            "repo": repo,
+            "issue": issue,
+            "title": title,
+            "url": url,
+            "affected_subsystems": affected_subsystems,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        self._upstream_updates.append(update_record)
+        self.memory.remember("tech_updates", {
+            "type": "breaking_change",
+            **update_record,
+        })
+
+        # Create action-plan knowledge node
+        if self._store:
+            from autono.knowledge.types import KnowledgeNode, VolatilityTier
+
+            action_items = [
+                f"- Review breaking change: {title}",
+                f"- Affected subsystems: {', '.join(affected_subsystems)}",
+            ]
+            if "encryption" in affected_subsystems:
+                action_items.append(
+                    "- Verify AES-256-GCM encryption/decryption still works"
+                )
+                action_items.append(
+                    "- Test backward compatibility with existing encrypted backups"
+                )
+            if "backup_recovery" in affected_subsystems:
+                action_items.append(
+                    "- Verify 4-line recovery dialog still functions correctly"
+                )
+                action_items.append(
+                    "- Test backup restore with existing encrypted data"
+                )
+            if "privacy" in affected_subsystems:
+                action_items.append(
+                    "- CRITICAL: Assess if user data could be exposed"
+                )
+                action_items.append(
+                    "- Review all encryption paths for privacy leaks"
+                )
+            if "key_management" in affected_subsystems:
+                action_items.append(
+                    "- Verify Ed25519 keypair generation and PBKDF2 derivation"
+                )
+            action_items.append(f"- Source: {url}")
+
+            node = KnowledgeNode(
+                content=(
+                    f"ACTION PLAN — Breaking change in {repo} (#{issue}):\n"
+                    f"{title}\n\n"
+                    + "\n".join(action_items)
+                ),
+                domain="night_chain",
+                subdomain="action_plans",
+                volatility=VolatilityTier.VOLATILE,
+                priority_score=95 if "privacy" in affected_subsystems else 90,
+                tags=["breaking-change", "action-plan", repo.split("/")[-1]],
+            )
+            self._store.save_node(node)
+
+    async def _handle_security_advisory(self, payload: dict[str, Any]) -> None:
+        """Handle a ``security_advisory`` broadcast from RepoWatcherAgent.
+
+        Security advisories are especially critical for NightChainAgent
+        because it handles encryption and key management. Only act on
+        advisories relevant to the night_chain domain.
+        """
+        repo = payload.get("repo", "")
+        issue = payload.get("issue", "")
+        title = payload.get("title", "")
+        domain = payload.get("domain", "")
+        url = payload.get("url", "")
+
+        self.log.warning(
+            "night.security_advisory",
+            repo=repo,
+            issue=issue,
+            title=title,
+            domain=domain,
+        )
+
+        if domain and domain != "night_chain":
+            return
+
+        update_record = {
+            "repo": repo,
+            "issue": issue,
+            "title": title,
+            "url": url,
+            "severity": "critical",
+            "received_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        self._upstream_updates.append(update_record)
+        self.memory.remember("tech_updates", {
+            "type": "security_advisory",
+            **update_record,
+        })
+
+        if self._store:
+            from autono.knowledge.types import KnowledgeNode, VolatilityTier
+
+            node = KnowledgeNode(
+                content=(
+                    f"SECURITY ADVISORY — {repo} (#{issue}): {title}\n"
+                    f"URL: {url}\n"
+                    f"Priority: CRITICAL — NightChainAgent handles encryption "
+                    f"and key management. Assess impact on AES-256-GCM "
+                    f"encryption, Ed25519 keypairs, PBKDF2 key derivation, "
+                    f"and the 4-line recovery protocol."
+                ),
+                domain="night_chain",
+                subdomain="security",
+                volatility=VolatilityTier.VOLATILE,
+                priority_score=99,
+                tags=["security", "advisory", repo.split("/")[-1]],
+            )
+            self._store.save_node(node)
+
     def report(self) -> dict[str, Any]:
         base = super().report()
         backup_stats = self._backup_service.stats() if self._backup_service else {}
@@ -312,5 +618,6 @@ class NightChainAgent(AutonomousAgent):
             "backup_count": self._backup_count,
             "last_backup_hash": self._last_backup_hash,
             "backup_service": backup_stats,
+            "upstream_updates": len(self._upstream_updates),
         })
         return base
