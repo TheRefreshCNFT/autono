@@ -81,5 +81,7 @@ class DevForge(AutonomousAgent):
         pass
 
     async def _process_grant(self, spec: dict) -> dict:
+        if not self.mission_gate(f"dev_grant: {spec.get('project', 'unknown')}"):
+            return {"status": "rejected", "reason": "mission_violation"}
         self.grants_issued += 1
         return {"status": "approved", "grant_id": f"grant_{self.grants_issued}"}

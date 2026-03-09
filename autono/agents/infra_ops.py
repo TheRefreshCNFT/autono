@@ -85,9 +85,12 @@ class InfraOps(AutonomousAgent):
             v["health"] = "ok"
 
     async def _deploy_validator(self, spec: dict) -> dict:
+        region = spec.get("region", "us-east")
+        if not self.mission_gate(f"deploy_validator: {region}"):
+            return {"status": "rejected", "reason": "mission_violation"}
         validator = {
             "id": f"validator_{len(self.validators) + 1}",
-            "region": spec.get("region", "us-east"),
+            "region": region,
             "status": "active",
         }
         self.validators.append(validator)
@@ -95,6 +98,8 @@ class InfraOps(AutonomousAgent):
         return validator
 
     async def _handle_high_load(self, detail: dict) -> None:
+        if not self.mission_gate("auto_scale: high_load"):
+            return
         self.log.warning("infra.high_load", detail=detail)
         self.memory.remember("decisions", {
             "type": "auto_scale",

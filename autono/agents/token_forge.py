@@ -71,8 +71,12 @@ class TokenForge(AutonomousAgent):
         })
 
     async def _create_token(self, spec: dict) -> dict:
+        token_name = spec.get("name", "Unnamed")
+        if not self.mission_gate(f"token_create: {token_name}"):
+            return {"name": token_name, "status": "rejected", "reason": "mission_violation"}
+
         token = {
-            "name": spec.get("name", "Unnamed"),
+            "name": token_name,
             "ticker": spec.get("ticker", "TKN"),
             "supply": spec.get("supply", 1_000_000),
             "policy": spec.get("policy", "standard"),

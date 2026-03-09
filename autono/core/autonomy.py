@@ -101,22 +101,29 @@ MISSION_CHECK_QUESTION = "Does this make crypto cheaper or easier for the end us
 COST_TARGETS = {
     "cardano_simple_transfer": {
         "current_wallet_fee_lovelace": 200_000,  # ~0.20 ADA typical wallet fee
-        "our_target_lovelace": 170_000,           # ~0.17 ADA via optimized UTXO selection
+        "l1_target_lovelace": 170_000,            # ~0.17 ADA via optimized UTXO selection
+        "sidechain_target_lovelace": 50_000,      # ~0.05 ADA — sidechain is much cheaper
         "strategy": "optimal_utxo_selection",
+        "user_chooses": True,  # user picks L1 vs sidechain based on needs
     },
     "cardano_cnt_transfer": {
         "current_wallet_fee_lovelace": 250_000,  # ~0.25 ADA for token transfers
-        "our_target_lovelace": 180_000,           # ~0.18 ADA via batching + minimal change
+        "l1_target_lovelace": 180_000,            # ~0.18 ADA via batching + minimal change
+        "sidechain_target_lovelace": 60_000,      # ~0.06 ADA on sidechain
         "strategy": "batch_and_minimize_change",
+        "user_chooses": True,
     },
     "cardano_nft_mint": {
         "current_wallet_fee_lovelace": 400_000,  # ~0.40 ADA typical mint
-        "our_target_lovelace": 300_000,           # ~0.30 ADA via reference scripts
+        "l1_target_lovelace": 300_000,            # ~0.30 ADA via reference scripts
+        "sidechain_target_lovelace": 100_000,     # ~0.10 ADA on sidechain
         "strategy": "reference_scripts_and_batching",
+        "user_chooses": True,
     },
     "cross_chain_spell": {
         "strategy": "sidechain_execution_with_settlement",
         "description": "Execute spell logic on sidechain, only settle final state on L1",
+        "user_chooses": True,
     },
 }
 
@@ -218,8 +225,13 @@ class AutonomyEngine:
             return False
         return True
 
-    def cost_check(self, operation: str, estimated_fee: int) -> dict[str, Any]:
+    def cost_check(self, operation: str, estimated_fee: int,
+                   chain: str = "sidechain") -> dict[str, Any]:
         """Check if our fee beats the current wallet standard.
+
+        Args:
+            chain: "l1" for Cardano mainchain, "sidechain" for autono sidechain.
+                   Sidechain targets are lower because that's the whole point.
 
         Returns comparison against known wallet fees.
         """
@@ -228,11 +240,18 @@ class AutonomyEngine:
             return {"operation": operation, "has_target": False}
 
         current = target.get("current_wallet_fee_lovelace", 0)
-        our_target = target.get("our_target_lovelace", 0)
+
+        # Pick the right target based on which chain the user chose
+        if chain == "sidechain":
+            our_target = target.get("sidechain_target_lovelace",
+                                    target.get("l1_target_lovelace", 0))
+        else:
+            our_target = target.get("l1_target_lovelace", 0)
 
         return {
             "operation": operation,
             "has_target": True,
+            "chain": chain,
             "estimated_fee": estimated_fee,
             "current_wallet_fee": current,
             "our_target": our_target,
@@ -240,4 +259,5 @@ class AutonomyEngine:
             "meets_target": estimated_fee <= our_target,
             "savings_vs_wallets": current - estimated_fee if current else 0,
             "strategy": target.get("strategy", ""),
+            "user_chooses": target.get("user_chooses", False),
         }

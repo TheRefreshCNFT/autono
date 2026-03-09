@@ -42,9 +42,23 @@ class BridgeKeeper(AutonomousAgent):
 
     async def handle_message(self, msg: Message) -> None:
         if msg.kind == "request" and msg.payload.get("type") == "bridge_transfer":
+            from_chain = msg.payload.get("from", "cardano")
+            to_chain = msg.payload.get("to", "sidechain")
+            chain = "sidechain" if "sidechain" in (from_chain, to_chain) else "l1"
+
+            if not self.mission_gate(
+                f"bridge: {from_chain}->{to_chain} {msg.payload.get('asset', 'ADA')}",
+                chain=chain,
+            ):
+                await self.send(msg.sender, "response", {
+                    "type": "bridge_transfer_rejected",
+                    "reason": "mission_violation",
+                })
+                return
+
             transfer = {
-                "from_chain": msg.payload.get("from", "cardano"),
-                "to_chain": msg.payload.get("to", "sidechain"),
+                "from_chain": from_chain,
+                "to_chain": to_chain,
                 "asset": msg.payload.get("asset", "ADA"),
                 "amount": msg.payload.get("amount", 0),
                 "sender": msg.sender,

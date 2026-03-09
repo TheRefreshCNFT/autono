@@ -17,7 +17,7 @@ from typing import Any
 import structlog
 
 from autono.agents import ALL_AGENTS
-from autono.core.autonomy import AutonomyEngine
+from autono.core.autonomy import AutonomyEngine, Priority
 from autono.core.council import HumanCouncil
 from autono.core.message_bus import MessageBus
 from autono.sidechain.block import BlockChain
@@ -137,6 +137,18 @@ class Orchestrator:
         for agent_name, goal in goals.items():
             self.autonomy.set_goal(agent_name, goal)
 
+        # System-wide mission goals — apply to ALL agents
+        self.autonomy.set_goal(
+            "all",
+            "Beat every existing wallet on transaction cost — L1 and sidechain",
+            Priority.CRITICAL,
+        )
+        self.autonomy.set_goal(
+            "all",
+            "Give users choice: L1 settlement vs sidechain speed vs privacy",
+            Priority.HIGH,
+        )
+
     # -- Human Council shortcuts ------------------------------------------
 
     def ask(self, agent_name: str, question: str) -> str:
@@ -183,6 +195,30 @@ class Orchestrator:
     def get_bridge_route(self, from_chain: str, to_chain: str) -> dict[str, Any]:
         """Get optimal cross-chain bridge route."""
         return self.cross_chain.get_bridge_route(from_chain, to_chain)
+
+    # -- Mission reporting ---------------------------------------------------
+
+    def mission_report(self) -> dict[str, Any]:
+        """Aggregate mission alignment across all agents."""
+        total_violations = 0
+        total_cycles = 0
+        agent_reports = {}
+        for name, agent in self.agents.items():
+            report = agent.report()
+            violations = report.get("mission_violations", 0)
+            cycles = report.get("work_cycles", 0)
+            total_violations += violations
+            total_cycles += cycles
+            if violations > 0:
+                agent_reports[name] = {"violations": violations, "cycles": cycles}
+
+        return {
+            "total_violations": total_violations,
+            "total_work_cycles": total_cycles,
+            "agents_with_violations": agent_reports,
+            "agent_count": len(self.agents),
+            "mission": self.autonomy.core_mission,
+        }
 
     # -- Wallet shortcuts ----------------------------------------------------
 

@@ -90,4 +90,7 @@ class GrowthCatalyst(AutonomousAgent):
         pass
 
     async def _evaluate_partnership(self, spec: dict) -> dict:
-        return {"status": "evaluating", "partner": spec.get("partner", "unknown")}
+        partner = spec.get("partner", "unknown")
+        if not self.mission_gate(f"partnership: {partner}"):
+            return {"status": "rejected", "reason": "mission_violation"}
+        return {"status": "evaluating", "partner": partner}

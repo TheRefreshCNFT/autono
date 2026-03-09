@@ -100,15 +100,21 @@ class ResearchLab(AutonomousAgent):
         })
 
     async def _investigate(self, spec: dict) -> dict:
+        topic = spec.get("topic", "general")
+        if not self.mission_gate(f"research: {topic}"):
+            return {"topic": topic, "status": "rejected", "reason": "mission_violation"}
         return {
-            "topic": spec.get("topic", "general"),
+            "topic": topic,
             "status": "investigating",
             "preliminary_findings": "promising",
         }
 
     async def _feasibility_study(self, spec: dict) -> dict:
+        feature = spec.get("feature", "unknown")
+        if not self.mission_gate(f"feasibility: {feature}"):
+            return {"feature": feature, "feasible": False, "reason": "mission_violation"}
         return {
-            "feature": spec.get("feature", "unknown"),
+            "feature": feature,
             "feasible": True,
             "estimated_complexity": "medium",
             "recommendation": "proceed_with_prototype",

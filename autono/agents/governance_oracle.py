@@ -239,6 +239,14 @@ class GovernanceOracle(AutonomousAgent):
     async def _handle_submit_proposal(self, msg: Message) -> None:
         payload = msg.payload
         raw_type = payload.get("proposal_type", "info_action")
+        title = payload.get("title", "Untitled Proposal")
+        if not self.mission_gate(f"proposal_submit: {raw_type} — {title}"):
+            await self.send(msg.sender, "response", {
+                "type": "error",
+                "error": "Proposal rejected — does not align with sidechain mission",
+            })
+            return
+
         try:
             ptype = ProposalType(raw_type)
         except ValueError:
@@ -766,6 +774,14 @@ class GovernanceOracle(AutonomousAgent):
         """Execute proposals that are ready."""
         for proposal in list(self.proposals.values()):
             if proposal.state != ProposalState.EXECUTING:
+                continue
+
+            if not self.mission_gate(
+                f"proposal_execute: {proposal.proposal_type.value} — {proposal.title}"
+            ):
+                proposal.state = ProposalState.FAILED
+                proposal.execution_result = "mission_violation"
+                self._record_outcome(proposal, "failed")
                 continue
 
             try:

@@ -667,6 +667,8 @@ class SentinelGuard(AutonomousAgent):
     async def _run_audit(self, spec: dict[str, Any]) -> dict[str, Any]:
         """Handle an explicit audit request from another agent."""
         script_hash = spec.get("script_hash")
+        if not self.mission_gate(f"audit: {script_hash or 'unknown'}"):
+            return {"status": "rejected", "reason": "mission_violation"}
 
         if not script_hash:
             return {
@@ -971,6 +973,8 @@ class SentinelGuard(AutonomousAgent):
         severity = msg.payload.get("severity", "medium")
         alert_type = msg.payload.get("type", "unknown")
         detail = msg.payload.get("detail", str(msg.payload))
+        if not self.mission_gate(f"security_response: {alert_type} severity={severity}"):
+            return
 
         self.log.warning("sentinel.alert_received",
                          sender=msg.sender, severity=severity, alert_type=alert_type)

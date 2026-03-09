@@ -184,6 +184,8 @@ class WalletSmith(AutonomousAgent):
             return {"error": "WalletService not initialized"}
 
         chains = spec.get("chains", ["cardano", "bitcoin"])
+        if not self.mission_gate(f"create_wallet: {','.join(chains)}"):
+            return {"error": "mission_violation"}
         word_count = spec.get("word_count", 24)
 
         result = self._wallet_service.create_wallet(

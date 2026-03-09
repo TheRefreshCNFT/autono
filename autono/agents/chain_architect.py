@@ -466,21 +466,22 @@ class ChainArchitect(AutonomousAgent):
             "sample_size": len(fees),
         })
 
-        # Compare against cost targets
+        # Compare against cost targets (L1 — this monitors Cardano mainchain)
         cost_alerts = []
         for op_name, target in COST_TARGETS.items():
-            target_fee = target.get("our_target_lovelace")
+            l1_target = target.get("l1_target_lovelace")
             wallet_fee = target.get("current_wallet_fee_lovelace")
-            if target_fee is None:
+            if l1_target is None:
                 continue
 
-            if avg_fee > target_fee:
+            if avg_fee > l1_target:
                 cost_alerts.append({
                     "operation": op_name,
                     "avg_fee": round(avg_fee),
-                    "our_target": target_fee,
+                    "l1_target": l1_target,
+                    "sidechain_target": target.get("sidechain_target_lovelace"),
                     "wallet_fee": wallet_fee,
-                    "exceeds_target_by": round(avg_fee - target_fee),
+                    "exceeds_target_by": round(avg_fee - l1_target),
                     "still_beats_wallet": avg_fee < wallet_fee if wallet_fee else None,
                 })
 
@@ -704,18 +705,27 @@ class ChainArchitect(AutonomousAgent):
             })
             return
 
-        our_target = target.get("our_target_lovelace", 0)
+        chain = msg.payload.get("chain", "sidechain")
         wallet_fee = target.get("current_wallet_fee_lovelace", 0)
+        if chain == "sidechain":
+            our_target = target.get("sidechain_target_lovelace",
+                                    target.get("l1_target_lovelace", 0))
+        else:
+            our_target = target.get("l1_target_lovelace", 0)
 
         await self.send(msg.sender, "response", {
             "type": "cost_check_result",
             "operation": operation,
+            "chain": chain,
             "has_target": True,
             "estimated_fee": estimated_fee,
             "our_target": our_target,
+            "l1_target": target.get("l1_target_lovelace"),
+            "sidechain_target": target.get("sidechain_target_lovelace"),
             "current_wallet_fee": wallet_fee,
             "beats_wallets": estimated_fee < wallet_fee if wallet_fee else None,
             "meets_target": estimated_fee <= our_target if our_target else None,
+            "user_chooses": target.get("user_chooses", False),
             "avg_network_fee": round(self._avg_tx_fee_lovelace) if self._avg_tx_fee_lovelace else None,
             "strategy": target.get("strategy", ""),
         })
@@ -839,15 +849,18 @@ class ChainArchitect(AutonomousAgent):
         # Cost target comparison
         cost_status: dict[str, Any] = {}
         for op_name, target in COST_TARGETS.items():
-            our_target = target.get("our_target_lovelace")
+            l1_target = target.get("l1_target_lovelace")
+            sc_target = target.get("sidechain_target_lovelace")
             wallet_fee = target.get("current_wallet_fee_lovelace")
-            if our_target is not None:
+            if l1_target is not None:
                 cost_status[op_name] = {
-                    "our_target": our_target,
+                    "l1_target": l1_target,
+                    "sidechain_target": sc_target,
                     "wallet_fee": wallet_fee,
+                    "user_chooses": target.get("user_chooses", False),
                     "avg_network_fee": round(self._avg_tx_fee_lovelace) if self._avg_tx_fee_lovelace else None,
-                    "target_met": (
-                        self._avg_tx_fee_lovelace <= our_target
+                    "l1_target_met": (
+                        self._avg_tx_fee_lovelace <= l1_target
                         if self._avg_tx_fee_lovelace else None
                     ),
                     "beats_wallet": (

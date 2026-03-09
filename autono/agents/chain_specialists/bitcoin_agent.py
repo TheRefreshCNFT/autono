@@ -236,6 +236,14 @@ class BitcoinChainAgent(CompatibilityTestMixin, AutonomousAgent):
 
             elif req_type == "cross_chain_transfer":
                 target_chain = msg.payload.get("to_chain", "")
+                if not self.mission_gate(
+                    f"bridge: bitcoin->{target_chain}",
+                    chain="sidechain" if "sidechain" in target_chain else "l1",
+                ):
+                    await self.send(msg.sender, "response", {
+                        "type": "bridge_rejected", "reason": "mission_violation",
+                    })
+                    return
                 router = self._cross_chain_routes.get(f"bitcoin_to_{target_chain}")
                 if router:
                     await self.send(router, "request", {
@@ -349,6 +357,8 @@ class BitcoinChainAgent(CompatibilityTestMixin, AutonomousAgent):
 
     async def _build_psbt(self, payload: dict) -> dict[str, Any]:
         """Build a PSBT with knowledge-enhanced input selection."""
+        if not self.mission_gate("build_psbt"):
+            return {"status": "rejected", "reason": "mission_violation"}
         return {
             "status": "ready",
             "chain": "bitcoin",

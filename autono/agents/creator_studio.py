@@ -72,10 +72,15 @@ class CreatorStudio(AutonomousAgent):
         })
 
     async def _mint_nft(self, spec: dict) -> dict:
+        nft_name = spec.get("name", "Untitled")
+        if not self.mission_gate(f"mint_nft: {nft_name}",
+                                 operation="cardano_nft_mint"):
+            return {"name": nft_name, "status": "rejected", "reason": "mission_violation"}
+
         self.nfts_minted += 1
         return {
             "id": f"nft_{self.nfts_minted}",
-            "name": spec.get("name", "Untitled"),
+            "name": nft_name,
             "metadata_standard": "CIP-68",
             "royalty_pct": spec.get("royalty", 5),
             "status": "minted",

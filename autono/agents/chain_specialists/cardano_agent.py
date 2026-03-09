@@ -265,6 +265,14 @@ class CardanoChainAgent(CompatibilityTestMixin, AutonomousAgent):
             elif req_type == "cross_chain_transfer":
                 # Route cross-chain requests to appropriate agent
                 target_chain = msg.payload.get("to_chain", "")
+                if not self.mission_gate(
+                    f"bridge: cardano->{target_chain}",
+                    chain="sidechain" if "sidechain" in target_chain else "l1",
+                ):
+                    await self.send(msg.sender, "response", {
+                        "type": "bridge_rejected", "reason": "mission_violation",
+                    })
+                    return
                 router = self._cross_chain_routes.get(
                     f"cardano_to_{target_chain}"
                 )
@@ -443,6 +451,8 @@ class CardanoChainAgent(CompatibilityTestMixin, AutonomousAgent):
         The fee formula: min_fee = min_fee_a * tx_size_bytes + min_fee_b
         We minimize tx_size_bytes by selecting optimal UTXOs.
         """
+        if not self.mission_gate("build_cardano_tx"):
+            return {"status": "rejected", "reason": "mission_violation"}
         address = payload.get("from_address", "")
         amount = int(payload.get("amount", 0))  # lovelace
         is_token = bool(payload.get("tokens"))
@@ -481,8 +491,9 @@ class CardanoChainAgent(CompatibilityTestMixin, AutonomousAgent):
 
         # Compare against existing wallets
         op_type = "cardano_cnt_transfer" if is_token else "cardano_simple_transfer"
-        beats_wallets = self.beats_existing_wallets(op_type, min_fee)
-        cost_target = self.get_cost_target(op_type)
+        chain = "l1" if not payload.get("to_chain") else "sidechain"
+        beats_wallets = self.beats_existing_wallets(op_type, min_fee, chain=chain)
+        cost_target = self.get_cost_target(op_type, chain=chain)
 
         return {
             "status": "ready",

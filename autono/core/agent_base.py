@@ -27,7 +27,9 @@ from pydantic import BaseModel, Field
 from autono.core.autonomy import (
     CORE_MISSION,
     COST_TARGETS,
+    MISSION_CHECK_QUESTION,
     MISSION_PRINCIPLES,
+    AutonomyEngine,
 )
 
 log = structlog.get_logger()
@@ -128,6 +130,9 @@ class AutonomousAgent(ABC):
         self._running = False
         self._peers: dict[str, AutonomousAgent] = {}
         self.log = log.bind(agent=name)
+        self.autonomy = AutonomyEngine()
+        self._mission_violations: int = 0
+        self._cycle_count: int = 0
 
     # -- lifecycle --------------------------------------------------------
 
@@ -154,7 +159,14 @@ class AutonomousAgent(ABC):
         while self._running:
             try:
                 self.status = AgentStatus.WORKING
+                self._cycle_count += 1
                 await self.do_work()
+                # Mission pulse — every 10th cycle, log alignment status
+                if self._cycle_count % 10 == 0:
+                    self.log.info("mission.pulse", agent=self.name,
+                                  cycle=self._cycle_count,
+                                  violations=self._mission_violations,
+                                  check=MISSION_CHECK_QUESTION)
             except Exception as exc:
                 self.log.error("agent.work_error", error=str(exc))
                 self.memory.remember("learnings", {"type": "error", "detail": str(exc)})
@@ -222,6 +234,29 @@ class AutonomousAgent(ABC):
 
     # -- mission awareness ------------------------------------------------
 
+    def mission_gate(self, action: str, *, cost_lovelace: int | None = None,
+                     operation: str = "", chain: str = "sidechain") -> bool:
+        """Gate every significant decision through mission alignment.
+
+        Call this before any action that costs money, moves assets, or
+        affects users. Returns True if aligned, False if blocked.
+        """
+        if not self.autonomy.mission_check(action):
+            self.log.warning("mission.blocked", action=action, agent=self.name)
+            self._mission_violations += 1
+            return False
+
+        if cost_lovelace is not None and operation:
+            check = self.autonomy.cost_check(operation, cost_lovelace, chain=chain)
+            if check.get("has_target") and not check.get("beats_wallets"):
+                self.log.warning("mission.cost_violation",
+                                 operation=operation, fee=cost_lovelace,
+                                 wallet_fee=check.get("current_wallet_fee"),
+                                 chain=chain, agent=self.name)
+                self._mission_violations += 1
+                return False
+        return True
+
     def serves_mission(self, action: str) -> bool:
         """Does this action make crypto cheaper or easier for end users?
 
@@ -230,14 +265,26 @@ class AutonomousAgent(ABC):
         prohibited = ["illegal", "scam", "fraud", "exploit", "rug pull"]
         return not any(p in action.lower() for p in prohibited)
 
-    def get_cost_target(self, operation: str) -> dict[str, Any] | None:
+    def get_cost_target(self, operation: str, chain: str = "sidechain") -> dict[str, Any] | None:
         """Get the cost target for an operation.
 
         Agents use this to ensure their fees beat existing wallets.
+        Returns the target dict with the appropriate target for the chain.
         """
-        return self.cost_targets.get(operation)
+        target = self.cost_targets.get(operation)
+        if not target:
+            return None
+        # Add resolved target for convenience
+        result = dict(target)
+        if chain == "sidechain":
+            result["our_target_lovelace"] = target.get(
+                "sidechain_target_lovelace", target.get("l1_target_lovelace", 0))
+        else:
+            result["our_target_lovelace"] = target.get("l1_target_lovelace", 0)
+        return result
 
-    def beats_existing_wallets(self, operation: str, our_fee: int) -> bool:
+    def beats_existing_wallets(self, operation: str, our_fee: int,
+                               chain: str = "sidechain") -> bool:
         """Check if our fee for this operation beats existing wallet fees."""
         target = self.cost_targets.get(operation)
         if not target:
@@ -254,6 +301,8 @@ class AutonomousAgent(ABC):
             "role": self.role,
             "status": self.status.value,
             "mission": "cost_and_accessibility",
+            "mission_violations": self._mission_violations,
+            "work_cycles": self._cycle_count,
             "capabilities": [c.value for c in self.capabilities],
             "recent_learnings": self.memory.recent("learnings", 5),
             "recent_decisions": self.memory.recent("decisions", 5),

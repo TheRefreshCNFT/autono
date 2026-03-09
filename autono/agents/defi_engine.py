@@ -96,10 +96,16 @@ class DeFiEngine(AutonomousAgent):
         })
 
     async def _execute_swap(self, params: dict) -> dict:
+        if not self.mission_gate(f"swap: {params.get('pair', 'unknown')}"):
+            return {"status": "rejected", "reason": "mission_violation"}
         return {"status": "executed", "slippage": "0.1%"}
 
     async def _add_liquidity(self, params: dict) -> dict:
+        if not self.mission_gate(f"add_liquidity: {params.get('pool', 'unknown')}"):
+            return {"status": "rejected", "reason": "mission_violation"}
         return {"status": "added", "lp_tokens": 100}
 
     async def _process_borrow(self, params: dict) -> dict:
+        if not self.mission_gate(f"borrow: {params.get('asset', 'unknown')}"):
+            return {"status": "rejected", "reason": "mission_violation"}
         return {"status": "approved", "rate": "3.5%"}

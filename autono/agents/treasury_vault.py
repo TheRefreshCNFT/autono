@@ -106,6 +106,10 @@ class TreasuryVault(AutonomousAgent):
     async def _process_funding_request(self, spec: dict) -> dict:
         amount = spec.get("amount", 0)
         purpose = spec.get("purpose", "unknown")
+
+        if not self.mission_gate(f"treasury_spend: {amount} for {purpose}"):
+            return {"status": "rejected", "reason": "mission_violation"}
+
         self.spending_log.append({
             "requester": spec.get("requester", "unknown"),
             "amount": amount,
