@@ -1,5 +1,10 @@
 """SpellCaster — Cross-chain spell coordination agent.
 
+MISSION: Cross-chain should be invisible AND cheap. A spell is just
+the internal mechanism — the user says "send tokens" and we figure out
+the cheapest path across chains, construct the spell, prove it, cast it,
+and confirm it. The user gets a receipt. That's it.
+
 The spell is the universal cross-chain instruction format. Instead of
 chain-specific bridge logic, every cross-chain operation is a spell:
 

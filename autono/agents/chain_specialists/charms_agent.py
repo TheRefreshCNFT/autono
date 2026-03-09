@@ -1,5 +1,10 @@
 """CharmsAgent — Cross-chain bridge specialist via Charms/BitcoinOS.
 
+MISSION: Make cross-chain invisible and cheap. Users don't pick chains —
+the agents route to whatever's cheapest. Charms spells are the mechanism
+but the user just says "send tokens" and it happens. Cross-chain is a
+feature, not a product.
+
 The critical link between Bitcoin and Cardano. Handles:
 
 CHARMS:
@@ -29,20 +34,18 @@ from autono.core.agent_base import AgentCapability, AutonomousAgent, Message
 
 
 class CharmsAgent(AutonomousAgent):
-    """Cross-chain bridge specialist via Charms and BitcoinOS.
+    """Cross-chain router — finds the cheapest path between any two chains.
 
-    The router between chains. When CardanoChainAgent needs to send
-    value to Bitcoin, or BitcoinChainAgent needs to mint a programmable
-    token, they talk to CharmsAgent.
-
-    Knows the Charms spell format, BitcoinOS Grail Bridge protocol,
-    and how tokens land natively on each chain.
+    Charms spells are the mechanism, but cost is the priority. When routing
+    a cross-chain transfer, this agent compares all available paths and
+    picks the one that costs the user the least. Users never see the
+    routing — they just get cheap, correct transfers.
     """
 
     def __init__(self) -> None:
         super().__init__(
             name="CharmsAgent",
-            role="Cross-chain bridge — Charms spells, BitcoinOS Grail Bridge, ZK proofs",
+            role="Cross-chain cost router — cheapest path between chains via Charms/ZK",
             capabilities=[
                 AgentCapability.BRIDGE_ASSETS,
                 AgentCapability.CREATE_TOKEN,

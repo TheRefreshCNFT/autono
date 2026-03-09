@@ -1,5 +1,10 @@
 """BitcoinChainAgent — Bitcoin protocol specialist.
 
+MISSION: Enable cheap cross-chain operations between Bitcoin and Cardano.
+Bitcoin is the settlement layer — Charms spells execute on Bitcoin, but
+the user never needs to know. When autono routes through Bitcoin, it must
+still be cheaper and easier than the alternative.
+
 Deep knowledge of:
 - Bitcoin UTXO model
 - BIP standards (BIP-32, BIP-39, BIP-44, BIP-84, BIP-86, BIP-141)
@@ -23,16 +28,17 @@ from autono.core.agent_base import AgentCapability, AutonomousAgent, Message
 
 
 class BitcoinChainAgent(AutonomousAgent):
-    """Bitcoin blockchain specialist.
+    """Bitcoin specialist — cheapest cross-chain path via Charms/BitcoinOS.
 
-    Wraps the WALI wallet's Bitcoin module and adds protocol intelligence.
-    Knows about Charms/BitcoinOS for programmable assets on Bitcoin.
+    When the cheapest route between chains goes through Bitcoin, this agent
+    handles it. Optimizes UTXO selection and fee estimation for minimum cost.
+    Users never see Bitcoin complexity — they just get cheap, fast transfers.
     """
 
     def __init__(self) -> None:
         super().__init__(
             name="BitcoinChainAgent",
-            role="Bitcoin protocol specialist — UTXO, BIPs, Taproot, PSBT, Charms",
+            role="Bitcoin cost optimizer — cheapest cross-chain path via Charms",
             capabilities=[
                 AgentCapability.MANAGE_WALLET,
                 AgentCapability.CREATE_TOKEN,

@@ -1,5 +1,10 @@
 """NightChainAgent — Night/Midnight blockchain specialist.
 
+MISSION: Make crypto safe without making it hard. Users should never
+worry about losing access or exposing secrets. Night Chain handles all
+encryption, backup, and recovery invisibly. No seed phrases shown to
+users, no manual backup steps — it just works.
+
 Dual role:
 1. Encrypted vault for seed phrases and sensitive data (existing WALI role)
 2. Persistence layer for the Links & Locks knowledge graph
@@ -24,16 +29,17 @@ from autono.core.agent_base import AgentCapability, AutonomousAgent, Message
 
 
 class NightChainAgent(AutonomousAgent):
-    """Night/Midnight blockchain specialist and knowledge vault.
+    """Night Chain — invisible security so users never worry about keys.
 
-    The Night Chain serves as the encrypted persistence layer for both
-    user seed phrases (existing) and the knowledge graph (new).
+    Handles all encryption, backup, and recovery behind the scenes. Users
+    don't see seed phrases or manage keys. Night Chain makes crypto safe
+    without making it complicated.
     """
 
     def __init__(self) -> None:
         super().__init__(
             name="NightChainAgent",
-            role="Night Chain specialist — encrypted vault, knowledge persistence, recovery",
+            role="Invisible security — encrypted backup, seamless recovery, zero user friction",
             capabilities=[
                 AgentCapability.MANAGE_WALLET,
                 AgentCapability.AUDIT,

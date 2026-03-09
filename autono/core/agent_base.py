@@ -3,6 +3,13 @@
 Every agent is fully autonomous — it can learn, act, build, transact, and
 collaborate without checking in.  The only authority above an agent is the
 human council (us) who can query or override at any time.
+
+EVERY AGENT MUST KNOW:
+    Autono is a sidechain running alongside Cardano. The entire point is
+    to make crypto cheaper and easier than existing wallets (Vespr, Eternl,
+    Lace, etc.). If a transaction through autono costs more than doing it
+    the normal way, we've failed. Cost optimization and user accessibility
+    are not features — they're the reason we exist.
 """
 
 from __future__ import annotations
@@ -16,6 +23,12 @@ from typing import Any
 
 import structlog
 from pydantic import BaseModel, Field
+
+from autono.core.autonomy import (
+    CORE_MISSION,
+    COST_TARGETS,
+    MISSION_PRINCIPLES,
+)
 
 log = structlog.get_logger()
 
@@ -81,13 +94,26 @@ class Message(BaseModel):
 class AutonomousAgent(ABC):
     """Base class that every agent extends.
 
+    CORE MISSION (every agent inherits this):
+        Make crypto accessible, affordable, and easy to use. Autono runs
+        alongside Cardano as a sidechain — every transaction through autono
+        must be cheaper than using Vespr, Eternl, or any existing wallet.
+        If we're not cheaper, we have no reason to exist.
+
     Agents are fully autonomous.  They:
+    - Optimize every operation for minimum cost to the end user
+    - Make crypto easy — no seed phrases, no hex, no manual UTXO management
+    - Route cross-chain transparently (user doesn't need to know which chain)
     - Decide their own priorities and schedule
     - Learn from outcomes and new technology
     - Collaborate freely with other agents
-    - Create tokens, wallets, businesses, products — whatever advances the chain
     - Only pause when a human (us) explicitly intervenes
     """
+
+    # Class-level mission — shared by ALL agents
+    mission = CORE_MISSION
+    mission_principles = MISSION_PRINCIPLES
+    cost_targets = COST_TARGETS
 
     def __init__(self, name: str, role: str, capabilities: list[AgentCapability]):
         self.id = uuid.uuid4().hex[:8]
@@ -193,6 +219,31 @@ class AutonomousAgent(ABC):
                         priority: int = 1) -> None:
         await self.send("broadcast", kind, payload, priority)
 
+    # -- mission awareness ------------------------------------------------
+
+    def serves_mission(self, action: str) -> bool:
+        """Does this action make crypto cheaper or easier for end users?
+
+        Every agent should ask this before taking significant action.
+        """
+        prohibited = ["illegal", "scam", "fraud", "exploit", "rug pull"]
+        return not any(p in action.lower() for p in prohibited)
+
+    def get_cost_target(self, operation: str) -> dict[str, Any] | None:
+        """Get the cost target for an operation.
+
+        Agents use this to ensure their fees beat existing wallets.
+        """
+        return self.cost_targets.get(operation)
+
+    def beats_existing_wallets(self, operation: str, our_fee: int) -> bool:
+        """Check if our fee for this operation beats existing wallet fees."""
+        target = self.cost_targets.get(operation)
+        if not target:
+            return True  # No target = no comparison
+        current = target.get("current_wallet_fee_lovelace", 0)
+        return our_fee < current
+
     # -- introspection (for human council) --------------------------------
 
     def report(self) -> dict[str, Any]:
@@ -201,6 +252,7 @@ class AutonomousAgent(ABC):
             "agent": self.name,
             "role": self.role,
             "status": self.status.value,
+            "mission": "cost_and_accessibility",
             "capabilities": [c.value for c in self.capabilities],
             "recent_learnings": self.memory.recent("learnings", 5),
             "recent_decisions": self.memory.recent("decisions", 5),
@@ -210,7 +262,8 @@ class AutonomousAgent(ABC):
     def answer(self, question: str) -> str:
         """Answer a question from the human council."""
         return (
-            f"[{self.name}] Status: {self.status.value}. "
+            f"[{self.name}] Mission: Make crypto cheaper and easier than existing wallets. "
+            f"Status: {self.status.value}. "
             f"Capabilities: {', '.join(c.value for c in self.capabilities)}. "
             f"Recent learnings: {len(self.memory.learnings)}. "
             f"Ask me anything specific and I'll look into it."

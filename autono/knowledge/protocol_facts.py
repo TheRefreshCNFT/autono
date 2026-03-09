@@ -1775,6 +1775,122 @@ CROSS_CHAIN_FACTS: list[ProtocolFact] = [
 
 
 # ============================================================================
+# AUTONO MISSION FACTS — the WHY behind everything
+# ============================================================================
+
+MISSION_FACTS: list[ProtocolFact] = [
+    {
+        "fact": "Autono is a sidechain running alongside Cardano to make crypto accessible, affordable, and easy to use",
+        "domain": "autono", "subdomain": "mission",
+        "answer": "Make crypto cheaper and easier than any existing wallet",
+        "answer_type": "string",
+        "source": "Core Architecture",
+        "tags": ["mission", "core", "sidechain", "cardano"],
+        "volatility": "permanent",
+    },
+    {
+        "fact": "Sending CNTs through autono must be cheaper than Vespr, Eternl, Lace, or any current Cardano wallet",
+        "domain": "autono", "subdomain": "mission",
+        "answer": "Cost optimization is the #1 priority for all transaction building",
+        "answer_type": "string",
+        "source": "Core Architecture",
+        "tags": ["mission", "cost", "cnt", "cheaper", "vespr", "eternl"],
+        "volatility": "permanent",
+    },
+    {
+        "fact": "Typical Cardano wallet fee for simple ADA transfer is ~0.20 ADA (200000 lovelace)",
+        "domain": "autono", "subdomain": "cost_target",
+        "answer": "200000",
+        "answer_type": "lovelace",
+        "source": "Wallet benchmarks (Vespr, Eternl, Lace)",
+        "tags": ["cost", "fee", "benchmark", "wallet", "ada-transfer"],
+        "volatility": "stable",
+    },
+    {
+        "fact": "Autono target fee for simple ADA transfer is ~0.17 ADA (170000 lovelace) via optimal UTXO selection",
+        "domain": "autono", "subdomain": "cost_target",
+        "answer": "170000",
+        "answer_type": "lovelace",
+        "source": "Core Architecture",
+        "tags": ["cost", "fee", "target", "ada-transfer", "optimization"],
+        "volatility": "stable",
+    },
+    {
+        "fact": "Typical Cardano wallet fee for CNT transfer is ~0.25 ADA (250000 lovelace)",
+        "domain": "autono", "subdomain": "cost_target",
+        "answer": "250000",
+        "answer_type": "lovelace",
+        "source": "Wallet benchmarks (Vespr, Eternl, Lace)",
+        "tags": ["cost", "fee", "benchmark", "wallet", "cnt-transfer"],
+        "volatility": "stable",
+    },
+    {
+        "fact": "Autono target fee for CNT transfer is ~0.18 ADA (180000 lovelace) via batching and minimal change outputs",
+        "domain": "autono", "subdomain": "cost_target",
+        "answer": "180000",
+        "answer_type": "lovelace",
+        "source": "Core Architecture",
+        "tags": ["cost", "fee", "target", "cnt-transfer", "optimization"],
+        "volatility": "stable",
+    },
+    {
+        "fact": "Autono cost optimization strategy: optimal UTXO selection (fewest inputs), minimize change outputs, batch operations, use reference scripts, minimum valid fee calculation",
+        "domain": "autono", "subdomain": "cost_strategy",
+        "answer": "minimal_utxo_selection + batching + reference_scripts",
+        "answer_type": "string",
+        "source": "Core Architecture",
+        "tags": ["cost", "strategy", "utxo", "batching", "optimization"],
+        "volatility": "permanent",
+    },
+    {
+        "fact": "Cardano fee formula: min_fee = min_fee_a * tx_size_bytes + min_fee_b (currently 44 * size + 155381)",
+        "domain": "autono", "subdomain": "cost_strategy",
+        "answer": "min_fee = 44 * tx_size_bytes + 155381",
+        "answer_type": "formula",
+        "source": "Cardano Protocol Parameters",
+        "tags": ["cost", "fee", "formula", "protocol-params"],
+        "volatility": "stable",
+    },
+    {
+        "fact": "Users should never see seed phrases, hex addresses, or raw UTXO data — agents handle all complexity",
+        "domain": "autono", "subdomain": "accessibility",
+        "answer": "All complexity hidden — user says 'send 50 ADA to Alice' and it happens",
+        "answer_type": "string",
+        "source": "Core Architecture",
+        "tags": ["mission", "accessibility", "user-experience", "simplicity"],
+        "volatility": "permanent",
+    },
+    {
+        "fact": "Cross-chain routing is automatic — users don't choose chains, agents find the cheapest path",
+        "domain": "autono", "subdomain": "accessibility",
+        "answer": "Chain-agnostic routing via cost comparison across all available paths",
+        "answer_type": "string",
+        "source": "Core Architecture",
+        "tags": ["mission", "cross-chain", "routing", "automatic", "cost"],
+        "volatility": "permanent",
+    },
+    {
+        "fact": "Charms is one tool in the toolbox, not the product — the product is cheap, easy crypto for everyone",
+        "domain": "autono", "subdomain": "mission",
+        "answer": "Charms, BitcoinOS, Night Chain are means to an end — the end is accessibility and affordability",
+        "answer_type": "string",
+        "source": "Core Architecture",
+        "tags": ["mission", "charms", "perspective", "toolbox"],
+        "volatility": "permanent",
+    },
+    {
+        "fact": "Autono will transition from Blockfrost to own node — can't rely on third-party long-term",
+        "domain": "autono", "subdomain": "infrastructure",
+        "answer": "Blockfrost for bootstrap, own cardano-node for production",
+        "answer_type": "string",
+        "source": "Core Architecture",
+        "tags": ["infrastructure", "node", "blockfrost", "self-hosted"],
+        "volatility": "stable",
+    },
+]
+
+
+# ============================================================================
 # MASTER REGISTRY
 # ============================================================================
 
@@ -1785,6 +1901,7 @@ ALL_PROTOCOL_FACTS: list[ProtocolFact] = (
     + BITCOINOS_FACTS
     + NIGHT_CHAIN_FACTS
     + CROSS_CHAIN_FACTS
+    + MISSION_FACTS
 )
 
 FACTS_BY_DOMAIN: dict[str, list[ProtocolFact]] = {
@@ -1794,6 +1911,7 @@ FACTS_BY_DOMAIN: dict[str, list[ProtocolFact]] = {
     "bitcoinos": BITCOINOS_FACTS,
     "night_chain": NIGHT_CHAIN_FACTS,
     "cross_chain": CROSS_CHAIN_FACTS,
+    "autono": MISSION_FACTS,
 }
 
 
