@@ -170,12 +170,22 @@ class WalletService:
         service.validate_address("addr1...", "cardano")
     """
 
-    def __init__(self, network: str = "testnet") -> None:
+    def __init__(self, network: str = "testnet",
+                 persist_path: str | None = None) -> None:
         self.network = NetworkType(network)
         self._wallets: dict[str, WalletState] = {}
         self._store = None
         self._graph = None
         self._wallets_created: int = 0
+
+        # Wallet state persistence
+        from pathlib import Path
+        self._persist_path = (
+            Path(persist_path) if persist_path
+            else Path.home() / ".autono" / "wallets"
+        )
+        self._persist_path.mkdir(parents=True, exist_ok=True)
+        self._load_wallet_state()
 
     def set_dependencies(self, store: Any, graph: Any) -> None:
         """Inject knowledge store and graph."""
@@ -265,6 +275,9 @@ class WalletService:
 
         # Store wallet state in knowledge graph (addresses only, never keys)
         self._store_wallet_in_graph(state)
+
+        # Persist wallet metadata to disk
+        self._save_wallet_state()
 
         log.info("wallet.created",
                  wallet_id=wallet_id,
@@ -772,6 +785,64 @@ class WalletService:
             )
             result[addr_type.value] = wallet_addr
         return result
+
+    # =========================================================================
+    # Wallet State Persistence
+    # =========================================================================
+
+    def _save_wallet_state(self) -> None:
+        """Persist wallet metadata to disk (addresses only, never keys)."""
+        import json
+
+        state_file = self._persist_path / "wallet_state.json"
+        data = {
+            "network": self.network.value,
+            "wallets_created": self._wallets_created,
+            "wallets": {
+                wid: w.as_dict() for wid, w in self._wallets.items()
+            },
+        }
+        with open(state_file, "w") as f:
+            json.dump(data, f, indent=2)
+
+        log.info("wallet.state_saved", count=len(self._wallets))
+
+    def _load_wallet_state(self) -> None:
+        """Load persisted wallet metadata from disk."""
+        import json
+
+        state_file = self._persist_path / "wallet_state.json"
+        if not state_file.exists():
+            return
+
+        try:
+            with open(state_file) as f:
+                data = json.load(f)
+
+            self._wallets_created = data.get("wallets_created", 0)
+            for wid, wdata in data.get("wallets", {}).items():
+                addresses = []
+                for addr_data in wdata.get("addresses", []):
+                    addresses.append(WalletAddress(
+                        chain=ChainType(addr_data["chain"]),
+                        address=addr_data["address"],
+                        address_type=addr_data.get("address_type", ""),
+                        derivation_path=addr_data.get("derivation_path", ""),
+                        public_key_hash="",  # not persisted
+                        network=NetworkType(addr_data.get("network", "testnet")),
+                    ))
+                self._wallets[wid] = WalletState(
+                    wallet_id=wid,
+                    addresses=addresses,
+                    chains=wdata.get("chains", []),
+                    network=wdata.get("network", "testnet"),
+                    encrypted_seed_asset_id=wdata.get("encrypted_seed_asset_id", ""),
+                    is_backed_up=wdata.get("is_backed_up", False),
+                )
+
+            log.info("wallet.state_loaded", count=len(self._wallets))
+        except Exception as e:
+            log.warning("wallet.state_load_error", error=str(e))
 
     # =========================================================================
     # Stats & Report

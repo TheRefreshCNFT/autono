@@ -132,6 +132,27 @@ class WalletSmith(AutonomousAgent):
                 "wallets": wallets,
             })
 
+        elif req_type == "backup_wallet":
+            result = await self._coordinate_backup(msg.payload)
+            await self.send(msg.sender, "response", {
+                "type": "backup_result", **result,
+            })
+
+        elif req_type == "recover_wallet":
+            result = await self._coordinate_recovery(msg.payload)
+            await self.send(msg.sender, "response", {
+                "type": "recovery_result", **result,
+            })
+
+        elif req_type == "backup_status":
+            await self.send("NightChainAgent", "request", {
+                "type": "backup_info",
+            })
+            await self.send(msg.sender, "response", {
+                "type": "backup_status_forwarded",
+                "message": "Backup status requested from NightChainAgent.",
+            })
+
         elif req_type == "ux_report":
             await self.send(msg.sender, "response", {
                 "type": "ux_report",
@@ -247,6 +268,105 @@ class WalletSmith(AutonomousAgent):
             chain, account, index, addr_type
         )
         return {"chain": chain, "path": path}
+
+    # -- Backup & Recovery coordination --------------------------------------
+
+    async def _coordinate_backup(self, spec: dict) -> dict:
+        """Coordinate a full backup through NightChainAgent.
+
+        User-friendly flow:
+        1. Validate access key
+        2. Forward to NightChainAgent for encrypted backup
+        3. Return step-by-step progress to user
+        """
+        access_key = spec.get("access_key", "")
+        if not access_key:
+            return {
+                "ok": False,
+                "message": "I need your access key to encrypt the backup.",
+                "detail": "Your access key is the 4-12 character key you set when creating your wallet.",
+            }
+
+        # Forward to NightChainAgent which owns the BackupService
+        await self.send("NightChainAgent", "request", {
+            "type": "backup_knowledge",
+            "access_key": access_key,
+        })
+
+        return {
+            "ok": True,
+            "message": "Backup started! NightChainAgent is encrypting your knowledge graph.",
+            "detail": (
+                "Your backup includes:\n"
+                "  - All wallet addresses and derivation paths\n"
+                "  - The entire knowledge graph (nodes, links, locks)\n"
+                "  - Protocol facts from all chain agents\n\n"
+                "Encryption: AES-256-GCM with PBKDF2 (100,000 iterations)\n"
+                "Your access key never leaves your device."
+            ),
+        }
+
+    async def _coordinate_recovery(self, spec: dict) -> dict:
+        """Coordinate wallet and knowledge recovery.
+
+        User-friendly 7-step flow:
+        1. Start recovery
+        2. Recovery dialog (4-line challenge)
+        3. Access key verification
+        4. Decryption
+        5. Integrity verification
+        6. State restoration
+        7. Complete
+        """
+        access_key = spec.get("access_key", "")
+        version = spec.get("version", 0)
+
+        if not access_key:
+            # Return the recovery steps so the user knows what to expect
+            await self.send("NightChainAgent", "request", {
+                "type": "recovery_steps",
+            })
+            return {
+                "ok": False,
+                "message": "Let's recover your wallet and knowledge!",
+                "detail": (
+                    "Here's what will happen:\n"
+                    "  1. You provide your recovery words (4-line dialog)\n"
+                    "  2. Enter your access key (3 attempts, 15-min lockout)\n"
+                    "  3. We decrypt everything with AES-256-GCM\n"
+                    "  4. Verify data integrity\n"
+                    "  5. Restore wallet addresses and knowledge graph\n"
+                    "  6. Rebuild semantic search\n"
+                    "  7. You're back in action!\n\n"
+                    "Please provide your access key to begin."
+                ),
+                "needs": "access_key",
+            }
+
+        # Start recovery dialog first
+        await self.send("NightChainAgent", "request", {
+            "type": "start_recovery",
+        })
+
+        # Forward restore request to NightChainAgent
+        await self.send("NightChainAgent", "request", {
+            "type": "restore_knowledge",
+            "access_key": access_key,
+            "version": version,
+        })
+
+        return {
+            "ok": True,
+            "message": "Recovery in progress! Decrypting and restoring your data...",
+            "detail": (
+                "NightChainAgent is:\n"
+                "  - Decrypting your backup with your access key\n"
+                "  - Verifying data integrity\n"
+                "  - Restoring knowledge graph nodes, links, and locks\n"
+                "  - Rebuilding semantic search index\n\n"
+                "This should only take a moment."
+            ),
+        }
 
     # -- Knowledge seeding ---------------------------------------------------
 

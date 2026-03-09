@@ -41,6 +41,8 @@ class NightChainAgent(AutonomousAgent):
         )
         self._graph = None
         self._store = None
+        self._backup_service = None
+        self._wallet_service = None
 
         # Night Chain protocol facts
         self._protocol_facts: list[dict[str, Any]] = [
@@ -92,9 +94,16 @@ class NightChainAgent(AutonomousAgent):
     def work_interval(self) -> float:
         return 30.0
 
-    def set_dependencies(self, store: Any, graph: Any) -> None:
+    def set_dependencies(self, store: Any, graph: Any,
+                         wallet_service: Any = None) -> None:
         self._store = store
         self._graph = graph
+        self._wallet_service = wallet_service
+
+        # Initialize BackupService with real dependencies
+        from autono.services.backup_service import BackupService
+        self._backup_service = BackupService()
+        self._backup_service.set_dependencies(store, graph, wallet_service)
 
     async def do_work(self) -> None:
         """Seed protocol facts and periodically backup knowledge graph."""
@@ -110,8 +119,7 @@ class NightChainAgent(AutonomousAgent):
             })
             self._research_requested = True
 
-        # Periodic knowledge graph backup to Night Chain
-        await self._backup_knowledge_graph()
+        # Periodic backups are triggered on-demand via message (requires access key)
 
     async def handle_message(self, msg: Message) -> None:
         if msg.kind == "request":
@@ -130,16 +138,28 @@ class NightChainAgent(AutonomousAgent):
                 })
 
             elif req_type == "backup_knowledge":
-                await self._backup_knowledge_graph()
+                result = await self._backup_knowledge_graph(msg.payload)
                 await self.send(msg.sender, "response", {
-                    "type": "backup_complete",
-                    "backup_count": self._backup_count,
+                    "type": "backup_complete", **result,
                 })
 
             elif req_type == "restore_knowledge":
                 result = await self._restore_knowledge_graph(msg.payload)
                 await self.send(msg.sender, "response", {
                     "type": "restore_complete", **result,
+                })
+
+            elif req_type == "backup_info":
+                info = self._backup_service.get_backup_info() if self._backup_service else {}
+                await self.send(msg.sender, "response", {
+                    "type": "backup_info", **info,
+                })
+
+            elif req_type == "recovery_steps":
+                steps = self._backup_service.get_recovery_steps() if self._backup_service else []
+                await self.send(msg.sender, "response", {
+                    "type": "recovery_steps",
+                    "steps": [s.as_dict() for s in steps],
                 })
 
             elif req_type == "start_recovery":
@@ -189,43 +209,69 @@ class NightChainAgent(AutonomousAgent):
         self.log.info("night.protocol_facts_seeded",
                       count=len(self._protocol_facts))
 
-    async def _backup_knowledge_graph(self) -> None:
-        """Backup the knowledge graph index to Night Chain encrypted storage.
+    async def _backup_knowledge_graph(self, payload: dict | None = None
+                                      ) -> dict[str, Any]:
+        """Backup the knowledge graph using BackupService with AES-256-GCM.
 
         The knowledge graph is treated like a seed phrase — encrypted with
-        AES-256-GCM and stored on Night Chain for recovery.
+        AES-256-GCM and stored for recovery.
         """
-        if not self._store:
-            return
+        if not self._backup_service:
+            return {"ok": False, "error": "BackupService not initialized"}
 
-        import hashlib
-        import json
+        access_key = (payload or {}).get("access_key", "")
+        if not access_key:
+            return {
+                "ok": False,
+                "error": "Access key required for encrypted backup",
+                "message": "Please provide your 4-12 character access key.",
+            }
 
-        # Serialize the current index
-        index_data = json.dumps(self._store._index, sort_keys=True)
-        current_hash = hashlib.sha256(index_data.encode()).hexdigest()[:16]
+        result = self._backup_service.create_backup(access_key)
 
-        # Only backup if changed
-        if current_hash == self._last_backup_hash:
-            return
+        if result.get("ok"):
+            self._backup_count = self._backup_service._backup_count
+            self._last_backup_hash = self._backup_service._last_backup_hash
+            self.log.info("night.knowledge_backup",
+                          backup_count=self._backup_count,
+                          version=result.get("version"))
 
-        # In production: encrypt and store on Night Chain
-        # For now: the store's persistence handles this
-        self._last_backup_hash = current_hash
-        self._backup_count += 1
-
-        self.log.info("night.knowledge_backup",
-                      backup_count=self._backup_count,
-                      index_hash=current_hash)
+        return result
 
     async def _restore_knowledge_graph(self, payload: dict) -> dict[str, Any]:
-        """Restore knowledge graph from Night Chain backup."""
-        # In production: retrieve encrypted backup, decrypt, rebuild
-        return {
-            "status": "restore_available",
-            "last_backup_hash": self._last_backup_hash,
-            "backup_count": self._backup_count,
-        }
+        """Restore knowledge graph from encrypted backup via BackupService."""
+        if not self._backup_service:
+            return {"ok": False, "error": "BackupService not initialized"}
+
+        access_key = payload.get("access_key", "")
+        version = payload.get("version", 0)
+
+        if not access_key:
+            return {
+                "ok": False,
+                "error": "Access key required for decryption",
+                "message": "Please provide your access key to decrypt the backup.",
+            }
+
+        if not version:
+            # Default to latest backup
+            backups = self._backup_service.list_backups()
+            if not backups:
+                return {
+                    "ok": False,
+                    "error": "No backups found",
+                    "message": "No backups available to restore from.",
+                }
+            version = backups[-1]["version"]
+
+        result = self._backup_service.restore_backup(version, access_key)
+
+        if result.get("ok"):
+            self.log.info("night.knowledge_restored",
+                          version=version,
+                          restored=result.get("restored"))
+
+        return result
 
     async def _encrypt_and_store(self, payload: dict) -> dict[str, Any]:
         """Encrypt data and store on Night Chain."""
@@ -254,9 +300,11 @@ class NightChainAgent(AutonomousAgent):
 
     def report(self) -> dict[str, Any]:
         base = super().report()
+        backup_stats = self._backup_service.stats() if self._backup_service else {}
         base.update({
             "protocol_facts": len(self._protocol_facts),
             "backup_count": self._backup_count,
             "last_backup_hash": self._last_backup_hash,
+            "backup_service": backup_stats,
         })
         return base

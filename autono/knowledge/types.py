@@ -89,6 +89,39 @@ class Link:
         else:
             self.success_rate = self.success_rate * 0.8
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dictionary for backup."""
+        return {
+            "id": self.id,
+            "source_node_id": self.source_node_id,
+            "target_node_id": self.target_node_id,
+            "relationship": self.relationship.value,
+            "shortcut_weight": self.shortcut_weight,
+            "compute_cost": self.compute_cost,
+            "success_rate": self.success_rate,
+            "use_count": self.use_count,
+            "created_at": self.created_at,
+            "last_used": self.last_used,
+            "description": self.description,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Link:
+        """Deserialize from dictionary."""
+        return cls(
+            id=data.get("id", ""),
+            source_node_id=data.get("source_node_id", ""),
+            target_node_id=data.get("target_node_id", ""),
+            relationship=LinkRelationship(data.get("relationship", "commonly_paired")),
+            shortcut_weight=data.get("shortcut_weight", 0.5),
+            compute_cost=data.get("compute_cost", "LOW"),
+            success_rate=data.get("success_rate", 1.0),
+            use_count=data.get("use_count", 0),
+            created_at=data.get("created_at", ""),
+            last_used=data.get("last_used", ""),
+            description=data.get("description", ""),
+        )
+
 
 @dataclass
 class Lock:
@@ -135,6 +168,39 @@ class Lock:
         self.status = NodeStatus.SHATTERED
         self.shattered_at = datetime.now(timezone.utc).isoformat()
         self.shattered_reason = reason
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dictionary for backup."""
+        return {
+            "id": self.id,
+            "node_id": self.node_id,
+            "status": self.status.value,
+            "absolute_answer": self.absolute_answer,
+            "answer_type": self.answer_type,
+            "verification_source": self.verification_source,
+            "dependency_hash": self.dependency_hash,
+            "created_at": self.created_at,
+            "last_validated": self.last_validated,
+            "shattered_at": self.shattered_at,
+            "shattered_reason": self.shattered_reason,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Lock:
+        """Deserialize from dictionary."""
+        return cls(
+            id=data.get("id", ""),
+            node_id=data.get("node_id", ""),
+            status=NodeStatus(data.get("status", "active")),
+            absolute_answer=data.get("absolute_answer"),
+            answer_type=data.get("answer_type", "string"),
+            verification_source=data.get("verification_source", ""),
+            dependency_hash=data.get("dependency_hash", ""),
+            created_at=data.get("created_at", ""),
+            last_validated=data.get("last_validated", ""),
+            shattered_at=data.get("shattered_at", ""),
+            shattered_reason=data.get("shattered_reason", ""),
+        )
 
 
 @dataclass
@@ -195,6 +261,39 @@ class MLock:
         """Break all locks. Underlying truth changed."""
         self.status = NodeStatus.SHATTERED
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dictionary for backup."""
+        return {
+            "id": self.id,
+            "status": self.status.value,
+            "payload": self.payload,
+            "payload_type": self.payload_type,
+            "description": self.description,
+            "verification_source": self.verification_source,
+            "volatility": self.volatility.value,
+            "last_validated": self.last_validated,
+            "incoming_links": [p.to_dict() for p in self.incoming_links],
+            "dependency_hash": self.dependency_hash,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> MLock:
+        """Deserialize from dictionary."""
+        mlock = cls(
+            id=data.get("id", ""),
+            status=NodeStatus(data.get("status", "active")),
+            payload=data.get("payload"),
+            payload_type=data.get("payload_type", "string"),
+            description=data.get("description", ""),
+            verification_source=data.get("verification_source", ""),
+            volatility=VolatilityTier(data.get("volatility", "permanent")),
+            last_validated=data.get("last_validated", ""),
+            dependency_hash=data.get("dependency_hash", ""),
+        )
+        for path_data in data.get("incoming_links", []):
+            mlock.incoming_links.append(IncomingPath.from_dict(path_data))
+        return mlock
+
 
 @dataclass
 class IncomingPath:
@@ -204,6 +303,27 @@ class IncomingPath:
     compute_cost: str = "LOW"
     success_rate: float = 1.0
     use_count: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dictionary for backup."""
+        return {
+            "source_embed_id": self.source_embed_id,
+            "method": self.method,
+            "compute_cost": self.compute_cost,
+            "success_rate": self.success_rate,
+            "use_count": self.use_count,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> IncomingPath:
+        """Deserialize from dictionary."""
+        return cls(
+            source_embed_id=data.get("source_embed_id", ""),
+            method=data.get("method", ""),
+            compute_cost=data.get("compute_cost", "LOW"),
+            success_rate=data.get("success_rate", 1.0),
+            use_count=data.get("use_count", 0),
+        )
 
 
 @dataclass
@@ -260,3 +380,52 @@ class KnowledgeNode:
     def prune(self) -> None:
         """Mark for removal by ExpansionManager."""
         self.status = NodeStatus.PRUNED
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dictionary for backup."""
+        return {
+            "id": self.id,
+            "content": self.content,
+            "domain": self.domain,
+            "subdomain": self.subdomain,
+            "status": self.status.value,
+            "embedding_hash": self.embedding_hash,
+            "embedding_model": self.embedding_model,
+            "volatility": self.volatility.value,
+            "last_validated": self.last_validated,
+            "created_at": self.created_at,
+            "source_file": self.source_file,
+            "source_hash": self.source_hash,
+            "link_ids": self.link_ids,
+            "lock_id": self.lock_id,
+            "is_locked": self.is_locked,
+            "is_mlocked": self.is_mlocked,
+            "bypass_llm": self.bypass_llm,
+            "priority_score": self.priority_score,
+            "tags": self.tags,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> KnowledgeNode:
+        """Deserialize from dictionary."""
+        return cls(
+            id=data.get("id", ""),
+            content=data.get("content", ""),
+            domain=data.get("domain", ""),
+            subdomain=data.get("subdomain", ""),
+            status=NodeStatus(data.get("status", "active")),
+            embedding_hash=data.get("embedding_hash", ""),
+            embedding_model=data.get("embedding_model", ""),
+            volatility=VolatilityTier(data.get("volatility", "stable")),
+            last_validated=data.get("last_validated", ""),
+            created_at=data.get("created_at", ""),
+            source_file=data.get("source_file", ""),
+            source_hash=data.get("source_hash", ""),
+            link_ids=data.get("link_ids", []),
+            lock_id=data.get("lock_id", ""),
+            is_locked=data.get("is_locked", False),
+            is_mlocked=data.get("is_mlocked", False),
+            bypass_llm=data.get("bypass_llm", False),
+            priority_score=data.get("priority_score", 50),
+            tags=data.get("tags", []),
+        )
